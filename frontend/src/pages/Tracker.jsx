@@ -1,0 +1,382 @@
+import { useParams, Link, useNavigate } from "react-router-dom"
+import { useEffect, useState } from "react"
+import { useUser } from "../UserContext"
+import { Navbar } from "../Navbar"
+
+function Tracker() {
+    const { roomId, slot } = useParams()
+
+    const navigate = useNavigate()
+    const user = useUser()
+
+    const [slotName, setSlotName] = useState("")
+    const [items, setItems] = useState([])
+    const [hints, setHints] = useState([])
+    const [locations, setLocations] = useState([])
+
+    const [assignedUUID, setAssigned] = useState(null)
+
+    // Consts for sorting tables
+    const [itemsSortedColumn, setItemsSortedColumn] = useState(localStorage.getItem("itemsSortedColumn") || null)
+    const [itemsSortDirection, setItemsSortDirection] = useState(localStorage.getItem("itemsSortDirection") || null)
+    const [locationsSortedColumn, setLocationsSortedColumn] = useState(localStorage.getItem("locationsSortedColumn") || null)
+    const [locationsSortDirection, setLocationsSortDirection] = useState(localStorage.getItem("locationsSortDirection") || null)
+    const [hintsSortedColumn, setHintsSortedColumn] = useState(localStorage.getItem("hintsSortedColumn") || null)
+    const [hintsSortDirection, setHintsSortDirection] = useState(localStorage.getItem("hintsSortDirection") || null)
+
+    // Consts for searching tables
+    const [filteredItems, setFilteredItems] = useState([])
+    const [itemFilter, setItemFilter] = useState('')
+    const [filteredLocations, setFilteredLocations] = useState([])
+    const [locationFilter, setLocationFilter] = useState('')
+    const [filteredHints, setFilteredHints] = useState([])
+    const [filterHints, setFilterHints] = useState('')
+
+    // Consts for collapsing tables
+    const [collapseItems, setCollapseItems] = useState(false)
+    const [collapseLocations, setCollapseLocations] = useState(false)
+    const [collapseHints, setCollapseHints] = useState(false)
+
+    useEffect(() => {
+        async function fetchItems() {
+            const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/tracker/${roomId}/${slot}`, {
+                method: "GET"
+            })
+
+            const result = await response.json()
+
+            if (response.ok) {
+                console.log("Successfully fetched items")
+
+                // Convert items from a dict to a list 
+                const itemDict = result.items
+                const itemList = []
+                
+                Object.keys(itemDict).forEach((itemKey) => {
+                    const item = {}
+                    item["name"] = itemKey
+                    item["count"] = itemDict[itemKey]["count"]
+                    item["last_order_received"] = itemDict[itemKey]["last_order_received"]
+
+                    itemList.push(item)
+                })
+                
+                setItems(itemList)
+                setFilteredItems(itemList)
+
+                setHints(result.hints)
+                setFilteredHints(result.hints)
+                setLocations(result.locations)
+                setFilteredLocations(result.locations)
+
+                setSlotName(result.name)
+                setAssigned(result.uuid)
+            }
+        }
+        fetchItems()
+    }, [])
+
+    // Put sort consts into localstorage
+    
+    useEffect(() => {
+        if (itemsSortedColumn) {
+            localStorage.setItem("itemsSortedColumn", itemsSortedColumn)
+        }
+    }, [itemsSortedColumn])
+
+    useEffect(() => {
+        if (itemsSortDirection) {
+            localStorage.setItem("itemsSortDirection", itemsSortDirection)
+        }
+    }, [itemsSortDirection])
+
+    useEffect(() => {
+        if (locationsSortedColumn) {
+            localStorage.setItem("locationsSortedColumn", locationsSortedColumn)
+        }
+    }, [locationsSortedColumn])
+
+    useEffect(() => {
+        if (locationsSortDirection) {
+            localStorage.setItem("locationsSortDirection", locationsSortDirection)
+        }
+    }, [locationsSortDirection])
+
+    useEffect(() => {
+        if (hintsSortedColumn) {
+            localStorage.setItem("hintsSortedColumn", hintsSortedColumn)
+        }
+    }, [hintsSortedColumn])
+
+    useEffect(() => {
+        if (hintsSortDirection) {
+            localStorage.setItem("hintsSortDirection", hintsSortDirection)
+        }
+    }, [hintsSortDirection])
+
+    useEffect(() => {
+        const filtered = []
+
+        items.forEach((item) => {
+            if (item["name"].toLowerCase().includes(itemFilter.toLowerCase()) ||
+                    String(item["count"]).toLowerCase().includes(itemFilter.toLowerCase()) ||
+                    String(item["last_order_received"]).includes(itemFilter.toLowerCase())) {
+                filtered.push(item)
+            }
+        })
+
+        setFilteredItems(filtered)
+    }, [itemFilter])
+
+    useEffect(() => {
+        const filtered = []
+
+        locations.forEach((location) => {
+            if (location["name"].toLowerCase().includes(locationFilter.toLowerCase())) {
+                filtered.push(location)
+            }
+        })
+
+        setFilteredLocations(filtered)
+    }, [locationFilter])
+
+    useEffect(() => {
+        const filteredItems = []
+
+        hints.forEach((hint) => {
+            if (hint["finding_player"].toLowerCase().includes(filterHints.toLowerCase()) ||
+                    hint["receiving_player"].toLowerCase().includes(filterHints.toLowerCase()) ||
+                    hint["item"].toLowerCase().includes(filterHints.toLowerCase()) ||
+                    hint["location"].toLowerCase().includes(filterHints.toLowerCase()) ||
+                    hint["game"].toLowerCase().includes(filterHints.toLowerCase()) ||
+                    hint["entrance"].toLowerCase().includes(filterHints.toLowerCase())) {
+                filteredItems.push(hint)
+            }
+        })
+
+        setFilteredHints(filteredItems)
+    }, [filterHints])
+
+    async function assignToSlot() {
+        const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/assign/${roomId}/${slot}`, {
+            method: "PUT",
+            credentials: "include"
+        })
+
+        const result = await response.json()
+
+        if (response.ok) {
+            setAssigned(user?.uuid)
+        } else {
+            console.log(result.error)
+        }
+    }
+
+    async function unassignSlot() {
+        const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/assign/${roomId}/${slot}`, {
+            method: "DELETE",
+            credentials: "include"
+        })
+
+        const result = await response.json()
+
+        if (response.ok) {
+            setAssigned(null)
+        } else {
+            console.log(result.error)
+        }
+    }
+
+    function sendToMultiTracker() {
+        navigate(`/multitracker/${roomId}`)
+    }
+
+    function setItemSort(column) {
+        if (itemsSortedColumn === column) {
+            setItemsSortDirection(itemsSortDirection === "asc" ? "desc" : "asc")
+        } else {
+            setItemsSortedColumn(column)
+            setItemsSortDirection("asc")
+        }
+    }
+
+    function setLocationSort(column) {
+        if (locationsSortedColumn === column) {
+            setLocationsSortDirection(locationsSortDirection === "asc" ? "desc" : "asc")
+        } else {
+            setLocationsSortedColumn(column)
+            setLocationsSortDirection("asc")
+        }
+    }
+
+    function setHintSort(column) {
+        if (hintsSortedColumn === column) {
+            setHintsSortDirection(hintsSortDirection === "asc" ? "desc" : "asc")
+        } else {
+            setHintsSortedColumn(column)
+            setHintsSortDirection("asc")
+        }
+    }
+
+    const sortedItems = collapseItems ? [] : (itemsSortedColumn ? [...filteredItems].sort((a, b) => {
+        if (a[itemsSortedColumn] < b[itemsSortedColumn]) return itemsSortDirection === "asc" ? -1 : 1
+        if (a[itemsSortedColumn] > b[itemsSortedColumn]) return itemsSortDirection === "asc" ? 1 : -1
+        return 0
+    }) : filteredItems)
+
+    const sortedLocations = collapseLocations ? [] : (locationsSortedColumn ? [...filteredLocations].sort((a, b) => {
+        if (a[locationsSortedColumn] < b[locationsSortedColumn]) return locationsSortDirection === "asc" ? -1 : 1
+        if (a[locationsSortedColumn] > b[locationsSortedColumn]) return locationsSortDirection === "asc" ? 1 : -1
+        return 0
+    }) : filteredLocations)
+
+    const sortedHints = collapseHints ? [] : (hintsSortedColumn ? [...filteredHints].sort((a, b) => {
+        if (a[hintsSortedColumn] < b[hintsSortedColumn]) return hintsSortDirection === "asc" ? -1 : 1
+        if (a[hintsSortedColumn] > b[hintsSortedColumn]) return hintsSortDirection === "asc" ? 1 : -1
+        return 0
+    }) : filteredHints)
+
+    return (
+        <div>
+            <title>{`${slotName}'s Tracker`}</title>
+            <Navbar user={user}></Navbar>
+            <div className="d-flex gap-2 mx-md-5">
+                <button className="btn btn-primary" onClick={sendToMultiTracker}>Back to Multiworld Tracker</button>
+                {
+                    assignedUUID === user?.uuid ? (
+                        <button className="btn btn-danger" onClick={unassignSlot}>Unassign</button>
+                    ) : (
+                        <div>
+                        {
+                            assignedUUID === null ? (
+                                <button className="btn btn-success" onClick={assignToSlot}>Assign</button>
+                            ) : (
+                                <button className="btn btn-success disabled">Can't assign</button>
+                            )
+                        }
+                        </div>
+                    )
+                }
+            </div>
+            <h1 className="text-center">Individual Tracker</h1>
+            <p className="text-center">Reload this page to update how many checks you've gotten. Won't update if your goal is beaten or your game is released. 
+            </p>
+            <div className="mx-md-5 m-3">
+                <input type="text" id="input" name="search" placeholder="Search" value={itemFilter} onChange={e => setItemFilter(e.target.value)} />
+                <button className="btn btn-primary" onClick={() => collapseItems ? setCollapseItems(false) : setCollapseItems(true)} style={{ marginLeft: '10px' }}>Collapse</button>
+            </div>
+            <div className="d-flex justify-content-center mx-md-5 table-contained">
+                <table className="table table-bordered table-hover">
+                    <thead>
+                        <tr className="table table-primary">
+                            <th onClick={() => setItemSort("name")} style={{cursor: 'pointer'}}>Item</th>
+                            <th onClick={() => setItemSort("count")} style={{cursor: 'pointer'}}>Count</th>
+                            <th onClick={() => setItemSort("last_order_received")} style={{cursor: 'pointer'}}>Last Order Received</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {sortedItems.map((item, index) => (
+                            <tr key={index}>
+                                <td>{item.name}</td>
+                                <td>{item.count}</td>
+                                <td>{item.last_order_received}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+            <h2 className="text-center">Location Checks</h2>
+            <div className="mx-md-5 m-3">
+                <input type="text" id="input" name="search" placeholder="Search" value={locationFilter} onChange={e => setLocationFilter(e.target.value)} />
+                <button className="btn btn-primary" onClick={() => collapseLocations ? setCollapseLocations(false) : setCollapseLocations(true)} style={{ marginLeft: '10px' }}>Collapse</button>
+            </div>
+            {
+                locations.length > 0 || collapseLocations ? (
+                    <div className="d-flex justify-content-center mx-md-5 table-contained">
+                        <table className="table table-bordered table-hover">
+                            <thead>
+                                <tr className="table table-primary">
+                                    <th onClick={() => setLocationSort("name")} style={{cursor: 'pointer'}}>Location</th>
+                                    <th onClick={() => setLocationSort("checked")} style={{cursor: 'pointer'}}>Checked</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {sortedLocations.map((location, index) => (
+                                    <tr key={index}>
+                                        <td>{location.name}</td>
+                                        <td>
+                                            {
+                                                {
+                                                    true: "✔",
+                                                    false: "",
+                                                }[location.checked] ?? "?"
+                                            }
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                ) : (
+                    <div>
+                        <p>Populating location info...</p>
+                    </div>
+                )
+            }
+            <h2 className="text-center">Hints</h2>
+            <div className="mx-md-5 m-3">
+                <input type="text" id="input" name="search" placeholder="Search" value={filterHints} onChange={e => setFilterHints(e.target.value)} />
+                <button className="btn btn-primary" onClick={() => collapseHints ? setCollapseHints(false) : setCollapseHints(true)} style={{ marginLeft: '10px' }}>Collapse</button>
+            </div>
+            <div className="d-flex justify-content-center mx-md-5 table-contained">
+                <table className="table table-bordered table-hover">
+                    <thead>
+                        <tr className="table table-primary">
+                            <th onClick={() => setHintSort("finding_player")} style={{cursor: 'pointer'}}>Finder</th>
+                            <th onClick={() => setHintSort("receiving_player")} style={{cursor: 'pointer'}}>Receiver</th>
+                            <th onClick={() => setHintSort("item")} style={{cursor: 'pointer'}}>Item</th>
+                            <th onClick={() => setHintSort("location")} style={{cursor: 'pointer'}}>Location</th>
+                            <th onClick={() => setHintSort("game")} style={{cursor: 'pointer'}}>Game</th>
+                            <th onClick={() => setHintSort("entrance")} style={{cursor: 'pointer'}}>Entrance</th>
+                            <th onClick={() => setHintSort("found")} style={{cursor: 'pointer'}}>Found</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {sortedHints.map((hint, index) => (
+                            <tr key={index}>
+                                {
+                                    slotName === hint.finding_player ? (
+                                        <td className="individual-hint-player">{hint.finding_player}</td>
+                                    ) : (
+                                        <td>{hint.finding_player}</td>
+                                    )
+                                }
+                                {
+                                    slotName === hint.receiving_player ? (
+                                        <td className="individual-hint-player">{hint.receiving_player}</td>
+                                    ) : (
+                                        <td>{hint.receiving_player}</td>
+                                    )
+                                }
+                                <td>{hint.item}</td>
+                                <td>{hint.location}</td>
+                                <td>{hint.game}</td>
+                                <td>{hint.entrance}</td>
+                                <td>
+                                    {
+                                        {
+                                            true: "✔",
+                                            false: "",
+                                        }[hint.found] ?? "?"
+                                    }
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    )
+}
+
+export default Tracker

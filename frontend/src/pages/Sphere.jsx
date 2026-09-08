@@ -1,0 +1,130 @@
+import { useEffect, useState } from "react"
+import { useParams } from "react-router-dom"
+import { useUser } from "../UserContext"
+import { Navbar } from "../Navbar"
+
+function Sphere() {
+    const { roomId } = useParams()
+    const user = useUser()
+
+    const [sphereData, setSphereData] = useState([])
+
+    // Consts for sorting and searching table
+    const [sortedColumn, setSortedColumn] = useState(localStorage.getItem("sortedColumn") || null)
+    const [sortDirection, setSortDirection] = useState(localStorage.getItem("sortDirection") || "asc")
+    const [filter, setFilter] = useState('')
+    const [filteredData, setFilteredData] = useState([])
+
+    useEffect(() => {
+        async function fetchSpheres() {
+            const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/spheres/${roomId}`, {
+                method: "GET"
+            })
+
+            const result = await response.json()
+
+            if (response.ok) {
+                console.log("Successfully fetched")
+                setSphereData(result.items)
+                setFilteredData(result.items)
+            }
+        }
+        fetchSpheres()
+    }, [])
+
+    // Put sort consts into local storage
+
+    useEffect(() => {
+        if (sortedColumn) {
+            localStorage.setItem("sortedColumn", sortedColumn)
+        }
+    }, [sortedColumn])
+
+    useEffect(() => {
+        if (sortDirection) {
+            localStorage.setItem("sortDirection", sortDirection)
+        }
+    }, [sortDirection])
+
+    function setSort(column) {
+        if (sortedColumn === column) {
+            console.log("The current direction is the same")
+            setSortDirection(sortDirection === "asc" ? "desc" : "asc")
+        } else {
+            setSortedColumn(column)
+            setSortDirection("asc")
+        }
+    }
+
+    useEffect(() => {
+        const filteredSpheres = []
+
+        sphereData.forEach((item) => {
+            if (item["item_name"].toLowerCase().includes(filter.toLowerCase()) ||
+                    item["location_name"].toLowerCase().includes(filter.toLowerCase()) ||
+                    String(item["sphere"]).includes(filter.toLowerCase()) ||
+                    item["from"].toLowerCase().includes(filter.toLowerCase()) ||
+                    item["to"].toLowerCase().includes(filter.toLowerCase()) ||
+                    item["game"].toLowerCase().includes(filter.toLowerCase())) {
+                filteredSpheres.push(item)
+            }
+        })
+
+        setFilteredData(filteredSpheres)
+    }, [filter])
+
+    const sortedSpheres = sortedColumn ? [...filteredData].sort((a, b) => {
+        if (a[sortedColumn] < b[sortedColumn]) return sortDirection === "asc" ? -1 : 1
+        if (a[sortedColumn] > b[sortedColumn]) return sortDirection === "asc" ? 1 : -1
+        return 0
+    }) : filteredData
+
+    return (
+        <div>
+            <title>Sphere Tracker</title>
+            <Navbar user={user}></Navbar>
+            <h1 className="text-center">Sphere tracker</h1>
+            <p className="mx-3 text-center">This tracker lists already found locations by their logical access sphere. 
+                It ignores items that cannot be sent and will therefore differ from the sphere numbers in the spoiler playthrough.</p>
+            <div className="mx-md-5 m-3">
+                <input type="text" id="input" name="search" placeholder="Search" value={filter} onChange={e => setFilter(e.target.value)} />
+            </div>
+            {
+                sphereData.length > 0 ? (
+                    <div className="d-flex justify-content-center mx-md-5">
+                        <table className="table table-hover">
+                            <thead>
+                                <tr className="table-primary">
+                                    <th onClick={() => setSort("sphere")} style={{cursor: 'pointer'}}>Sphere</th>
+                                    <th onClick={() => setSort("from")} style={{cursor: 'pointer'}}>Finder</th>
+                                    <th onClick={() => setSort("to")} style={{cursor: 'pointer'}}>Receiver</th>
+                                    <th onClick={() => setSort("item_name")} style={{cursor: 'pointer'}}>Item</th>
+                                    <th onClick={() => setSort("location_name")} style={{cursor: 'pointer'}}>Location</th>
+                                    <th onClick={() => setSort("game")} style={{cursor: 'pointer'}}>Game</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {sortedSpheres.map((item, index) => (
+                                    <tr key={index}>
+                                        <td>{item.sphere}</td>
+                                        <td>{item.from}</td>
+                                        <td>{item.to}</td>
+                                        <td>{item.item_name}</td>
+                                        <td>{item.location_name}</td>
+                                        <td>{item.game}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                ) : (
+                    <div className="d-flex justify-content-center mx-md-5">
+                        <p>No received items</p>
+                    </div>
+                )
+            }
+        </div>
+    )
+}
+
+export default Sphere
