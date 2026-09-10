@@ -1,0 +1,32 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "5001:5001"
+      - "38281-38301:38281-38301"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/uploads:/app/uploads
+    # depends_on:
+    #   - db
+  
+  frontend:
+    build: 
+      context: ./frontend
+      target: build
+    command: npm run dev -- --host
+    ports: 
+      - "5173:5173"
+    env_file:
+      - ./frontend/.env
+    depends_on:
+      - backend
+  
+  # db:
+  #   image: postgres
+  #   environment:
+  #     - POSTGRES_USER=postgres
+  #     - POSTGRES_PASSWORD=mysecretpassword
+  #   ports:
+  #     - '5432:5432'
