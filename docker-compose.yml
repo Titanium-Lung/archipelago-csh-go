@@ -8,8 +8,8 @@ services:
       - ./backend/.env
     volumes:
       - ./backend/uploads:/app/uploads
-    # depends_on:
-    #   - db
+    depends_on:
+      - db
   
   frontend:
     build: 
@@ -23,10 +23,10 @@ services:
     depends_on:
       - backend
   
-  # db:
-  #   image: postgres
-  #   environment:
-  #     - POSTGRES_USER=postgres
-  #     - POSTGRES_PASSWORD=mysecretpassword
-  #   ports:
-  #     - '5432:5432'
+  db:
+    image: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=mysecretpassword
+    ports:
+      - '5432:5432'

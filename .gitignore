@@ -196,3 +196,9 @@ vite.config.ts.timestamp-*
 # Frontend
 frontend/node_modules/
 frontend/dist/
+
+# Backend
+backend/sample ap files
+backend/uploads/
+*.pyc
+.venv/
