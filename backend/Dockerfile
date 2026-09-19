@@ -14,12 +14,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN uv pip install --system --no-cache -r requirements.txt
 
-COPY --from=builder /archipelago /app/archipelago
+COPY --from=builder /archipelago ./archipelago
 COPY decompress_ap.py .
-COPY ./Archipelago-0.6.7 /app/Archipelago-0.6.7
+COPY ./Archipelago-0.6.7 ./Archipelago-0.6.7
 
 EXPOSE 5001
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["/app/archipelago"]
+CMD ["./archipelago"]

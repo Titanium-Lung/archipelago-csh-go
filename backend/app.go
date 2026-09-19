@@ -36,8 +36,9 @@ type User struct {
 	CSH      bool   `json:"csh"`
 }
 
-type Pool struct {
-	db *pgxpool.Pool
+type Server struct {
+	db             *pgxpool.Pool
+	processManager *ProcessManager
 }
 
 var user User
@@ -48,15 +49,15 @@ var PORT_RANGE = 20
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-func NewPool(db *pgxpool.Pool) *Pool {
-	return &Pool{db: db}
+func NewServer(db *pgxpool.Pool, mngr *ProcessManager) *Server {
+	return &Server{db: db, processManager: mngr}
 }
 
 func getUser(c *gin.Context) {
 	c.JSON(http.StatusOK, user)
 }
 
-func (pool *Pool) uploadFile(c *gin.Context) {
+func (server *Server) uploadFile(c *gin.Context) {
 	file, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -172,7 +173,7 @@ func (pool *Pool) uploadFile(c *gin.Context) {
 		}
 	}
 
-	_, err = pool.db.Exec(c.Request.Context(), "INSERT INTO rooms (room_id, port, admin, extract_folder_path, arch_file_path, start, name, private) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+	_, err = server.db.Exec(c.Request.Context(), "INSERT INTO rooms (room_id, port, admin, extract_folder_path, arch_file_path, start, name, private) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
 		roomId, port, admin, extractFolderPath, archFilePath, start, roomName, private)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to insert room into database: " + err.Error()})
@@ -202,7 +203,7 @@ func (pool *Pool) uploadFile(c *gin.Context) {
 			}
 		}
 	}
-	if _, err = pool.db.CopyFrom(
+	if _, err = server.db.CopyFrom(
 		c.Request.Context(),
 		pgx.Identifier{"locations"},
 		[]string{"slot", "location_id", "sphere", "from_name", "game", "to_name", "location_name", "item_name", "room_id"},
@@ -216,7 +217,7 @@ func (pool *Pool) uploadFile(c *gin.Context) {
 	for slot, slotInfo := range decodedArch.SlotInfo {
 		slots = append(slots, []any{slot, slotInfo.SlotName, slotInfo.Game, roomId})
 	}
-	if _, err = pool.db.CopyFrom(
+	if _, err = server.db.CopyFrom(
 		c.Request.Context(),
 		pgx.Identifier{"slots"},
 		[]string{"id", "name", "game", "room_id"},
@@ -232,13 +233,18 @@ func (pool *Pool) uploadFile(c *gin.Context) {
 			items = append(items, []any{game, itemName, strconv.Itoa(itemId), roomId})
 		}
 	}
-	if _, err = pool.db.CopyFrom(
+	if _, err = server.db.CopyFrom(
 		c.Request.Context(),
 		pgx.Identifier{"items"},
 		[]string{"game", "name", "id", "room_id"},
 		pgx.CopyFromRows(items),
 	); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to insert items into database: " + err.Error()})
+		return
+	}
+
+	if err = server.processManager.StartServer(roomId, archFilePath, extractFolderPath, port); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to start archipelago server: %s", err.Error())})
 		return
 	}
 
@@ -261,11 +267,6 @@ func checkPort(port int) bool {
 
 func decompressAP(apPath string) (ArchipelagoFile, error) {
 	cmd := exec.Command("python3", "decompress_ap.py", apPath)
-	if dir := os.Getenv("ARCHIPELAGO_SCRIPTS_DIR"); dir != "" {
-		cmd.Dir = dir
-	} else {
-		cmd.Dir = "./"
-	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -330,7 +331,9 @@ func main() {
 	}
 	defer pool.Close()
 
-	dbpool := NewPool(pool)
+	processManager := NewProcessManager()
+
+	server := NewServer(pool, processManager)
 	if err := runMigrations(os.Getenv("DATABASE_URL")); err != nil {
 		log.Fatal(err)
 	}
@@ -350,7 +353,7 @@ func main() {
 	}))
 
 	router.GET("/api/user", getUser)
-	router.POST("/api/upload", dbpool.uploadFile)
+	router.POST("/api/upload", server.uploadFile)
 
 	router.Run(":5001")
 }
