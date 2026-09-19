@@ -276,7 +276,8 @@ func (server *Server) getAllRooms(c *gin.Context) {
 
 	timeZone := timeFormat.Data.TimeZone
 
-	var rooms []map[string]any
+	// var rooms []map[string]any
+	rooms := make([]map[string]any, 0)
 
 	var start time.Time
 	var port int
@@ -316,6 +317,40 @@ func (server *Server) getAllRooms(c *gin.Context) {
 	})
 
 	c.JSON(http.StatusOK, gin.H{"rooms": rooms})
+}
+
+func (server *Server) deleteRoom(c *gin.Context) {
+	roomId := c.Param("roomId")
+
+	var admin, extractFolderPath string
+	err := server.db.QueryRow(c.Request.Context(), "SELECT admin, extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&admin, &extractFolderPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get info from database: %s", err.Error())})
+		return
+	}
+
+	// check if current user is admin
+
+	roomUUID, err := uuid.Parse(roomId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to parse room Id: %s", err.Error())})
+		return
+	}
+	server.processManager.Terminate(roomUUID)
+
+	err = os.RemoveAll(extractFolderPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to delete room folder: %s", err.Error())})
+		return
+	}
+
+	server.db.Exec(c.Request.Context(), "DELETE FROM locations WHERE room_id = $1", roomId)
+	server.db.Exec(c.Request.Context(), "DELETE FROM items WHERE room_id = $1", roomId)
+	server.db.Exec(c.Request.Context(), "UPDATE rooms SET active = false WHERE room_id = $1", roomId)
+	server.db.Exec(c.Request.Context(), "DELETE FROM slots WHERE player_uuid is null AND room_id IN (SELECT room_id FROM rooms WHERE active = false)")
+	server.db.Exec(c.Request.Context(), "DELETE FROM rooms WHERE room_id NOT IN (SELECT room_id FROM slots)")
+
+	c.JSON(http.StatusOK, gin.H{"message": "successfully deleted"})
 }
 
 func checkPort(port int) bool {
@@ -428,6 +463,7 @@ func main() {
 	router.GET("/api/user", getUser)
 	router.POST("/api/upload", server.uploadFile)
 	router.PUT("/api/rooms", server.getAllRooms)
+	router.DELETE("/api/delete/:roomId", server.deleteRoom)
 
 	router.Run(":5001")
 }
