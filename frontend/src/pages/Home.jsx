@@ -28,7 +28,9 @@ function Home() {
 
             if (response.ok) {
                 setRooms(result.rooms)
-            } 
+            } else {
+                console.log(result.error)
+            }
         }
         fetchRooms()
     }, [])
@@ -107,8 +109,8 @@ function Home() {
                             <div className="form-group d-flex justify-content-center align-items-center gap-2">
                                 <input type="file" accept=".zip" onChange={handleFileChange} className="form-control-file" id="exampleInputFile" aria-describedby="fileHelp" />
                                 <button className="btn btn-primary" onClick={handleUpload}>Upload</button>
-                                <label class="form-check-label d-flex justify-content-center gap-1 align-items-center">
-                                    <input class="form-check-input" type="checkbox" checked={isPrivate} onChange={handleCheckboxChange} />
+                                <label className="form-check-label d-flex justify-content-center gap-1 align-items-center">
+                                    <input className="form-check-input" type="checkbox" checked={isPrivate} onChange={handleCheckboxChange} />
                                     Private
                                 </label>
                             </div>

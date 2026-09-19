@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,12 @@ type User struct {
 type Server struct {
 	db             *pgxpool.Pool
 	processManager *ProcessManager
+}
+
+type TimeFormat struct {
+	Data struct {
+		TimeZone string `json:"timeZone"`
+	} `json:"data"`
 }
 
 var user User
@@ -110,7 +117,8 @@ func (server *Server) uploadFile(c *gin.Context) {
 
 	archive, err := zip.OpenReader(zipFolderPath)
 	if err != nil {
-		panic(err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open zip"})
+		return
 	}
 	defer archive.Close()
 
@@ -121,7 +129,7 @@ func (server *Server) uploadFile(c *gin.Context) {
 			archFilePath = filePath
 		}
 		if !strings.HasPrefix(filePath, filepath.Clean(extractFolderPath)+string(os.PathSeparator)) {
-			fmt.Println("invalid file path")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid file path in zip"})
 			return
 		}
 		if file.FileInfo().IsDir() {
@@ -129,20 +137,24 @@ func (server *Server) uploadFile(c *gin.Context) {
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(filePath), os.ModePerm); err != nil {
-			panic(err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create parent directory"})
+			return
 		}
 		dstFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
 		if err != nil {
-			panic(err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create file"})
+			return
 		}
 
 		fileInArchive, err := file.Open()
 		if err != nil {
-			panic(err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open zip entry"})
+			return
 		}
 
 		if _, err := io.Copy(dstFile, fileInArchive); err != nil {
-			panic(err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write file contents"})
+			return
 		}
 
 		dstFile.Close()
@@ -255,6 +267,57 @@ func (server *Server) uploadFile(c *gin.Context) {
 	})
 }
 
+func (server *Server) getAllRooms(c *gin.Context) {
+	var timeFormat TimeFormat
+	if err := c.ShouldBindJSON(&timeFormat); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	timeZone := timeFormat.Data.TimeZone
+
+	var rooms []map[string]any
+
+	var start time.Time
+	var port int
+	var roomId, admin, name string
+	rows, _ := server.db.Query(c.Request.Context(), "SELECT room_id, port, start, admin, name FROM rooms WHERE port >= $1 AND port < $2 AND active = true AND private = false", SERVER_PORT, SERVER_PORT+PORT_RANGE)
+	_, err := pgx.ForEachRow(rows, []any{&roomId, &port, &start, &admin, &name}, func() error {
+		room := make(map[string]any)
+		room["room_id"] = roomId
+		room["port"] = port
+		startStr, formatErr := formatRoomTime(start, timeZone)
+		if formatErr != nil {
+			return formatErr
+		}
+		room["start"] = startStr
+		room["start_for_sorting"] = start
+		room["admin_uuid"] = admin
+		room["name"] = name
+		roomUUID, err := uuid.Parse(roomId)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to interpret room Id as uuid: %s", err.Error())})
+		}
+		room["running"] = server.processManager.IsRunning(roomUUID)
+
+		rooms = append(rooms, room)
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to format start date: %s", err.Error())})
+		return
+	}
+
+	// Sort list based on starting time
+	slices.SortFunc(rooms, func(a, b map[string]any) int {
+		A := a["start_for_sorting"].(time.Time)
+		B := b["start_for_sorting"].(time.Time)
+		return -time.Time.Compare(A, B)
+	})
+
+	c.JSON(http.StatusOK, gin.H{"rooms": rooms})
+}
+
 func checkPort(port int) bool {
 	address := fmt.Sprintf(":%d", port)
 	listener, err := net.Listen("tcp", address)
@@ -282,6 +345,16 @@ func decompressAP(apPath string) (ArchipelagoFile, error) {
 	}
 
 	return result, nil
+}
+
+func formatRoomTime(t time.Time, timeZone string) (string, error) {
+	loc, err := time.LoadLocation(timeZone)
+	if err != nil {
+		return "", err
+	}
+	localTime := t.In(loc)
+
+	return localTime.Format("1/2/06 3:04 pm"), nil
 }
 
 func (s *SlotInfo) UnmarshalJSON(data []byte) error {
@@ -354,6 +427,7 @@ func main() {
 
 	router.GET("/api/user", getUser)
 	router.POST("/api/upload", server.uploadFile)
+	router.PUT("/api/rooms", server.getAllRooms)
 
 	router.Run(":5001")
 }
