@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 	"uuid"
 )
@@ -83,9 +84,44 @@ func (m *ProcessManager) StartServer(roomId uuid.UUID, archFilePath string, extr
 func (m *ProcessManager) markStopped(roomId uuid.UUID) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	if _, exists := m.rooms[roomId]; exists {
-		m.rooms[roomId] = nil
+	delete(m.rooms, roomId)
+}
+
+func (m *ProcessManager) IsRunning(roomId uuid.UUID) bool {
+	m.mutex.RLock()
+	server, exists := m.rooms[roomId]
+	m.mutex.RUnlock()
+
+	if !exists || server == nil {
+		return false
 	}
+
+	err := server.command.Process.Signal(syscall.Signal(0))
+	return err == nil
+}
+
+func (m *ProcessManager) Terminate(roomId uuid.UUID) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	server, exists := m.rooms[roomId]
+	if !exists {
+		return fmt.Errorf("No archipelago game with this id")
+	}
+	server.command.Process.Signal(syscall.SIGTERM)
+	server.command.Wait()
+	delete(m.rooms, roomId)
+	return nil
+}
+
+func (m *ProcessManager) SendCommand(roomId uuid.UUID, command string) error {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	server, exists := m.rooms[roomId]
+	if !exists {
+		return fmt.Errorf("No archipelago game with this id")
+	}
+	_, err := server.stdin.Write([]byte(command + "\n"))
+	return err
 }
 
 func writeLog(stdout io.ReadCloser, logPath string, m *ProcessManager, roomId uuid.UUID, logMutex *sync.Mutex) {
