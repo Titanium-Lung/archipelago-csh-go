@@ -353,6 +353,30 @@ func (server *Server) deleteRoom(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "successfully deleted"})
 }
 
+func (server *Server) roomInfo(c *gin.Context) {
+	roomId := c.Param("roomId")
+	roomUUID, err := uuid.Parse(roomId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
+		return
+	}
+
+	if !server.processManager.IsRunning(roomUUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
+		return
+	}
+
+	var port int
+	var admin, name string
+	err = server.db.QueryRow(c.Request.Context(), "SELECT port, admin, name FROM rooms WHERE room_id = $1", roomId).Scan(&port, &admin, &name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"port": port, "admin": admin, "name": name})
+}
+
 func checkPort(port int) bool {
 	address := fmt.Sprintf(":%d", port)
 	listener, err := net.Listen("tcp", address)
@@ -464,6 +488,7 @@ func main() {
 	router.POST("/api/upload", server.uploadFile)
 	router.PUT("/api/rooms", server.getAllRooms)
 	router.DELETE("/api/delete/:roomId", server.deleteRoom)
+	router.GET("/api/room/:roomId", server.roomInfo)
 
 	router.Run(":5001")
 }
