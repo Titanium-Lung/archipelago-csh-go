@@ -87,6 +87,14 @@ func (m *ProcessManager) markStopped(roomId uuid.UUID) {
 	delete(m.rooms, roomId)
 }
 
+func (m *ProcessManager) exists(roomId uuid.UUID) bool {
+	m.mutex.RLock()
+	_, exists := m.rooms[roomId]
+	m.mutex.RUnlock()
+
+	return exists
+}
+
 func (m *ProcessManager) IsRunning(roomId uuid.UUID) bool {
 	m.mutex.RLock()
 	server, exists := m.rooms[roomId]

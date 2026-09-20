@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/zip"
-	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -10,10 +9,8 @@ import (
 	"io"
 	"log"
 	"math/rand"
-	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -361,7 +358,7 @@ func (server *Server) roomInfo(c *gin.Context) {
 		return
 	}
 
-	if !server.processManager.IsRunning(roomUUID) {
+	if !server.processManager.exists(roomUUID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
 		return
 	}
@@ -377,43 +374,39 @@ func (server *Server) roomInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"port": port, "admin": admin, "name": name})
 }
 
-func checkPort(port int) bool {
-	address := fmt.Sprintf(":%d", port)
-	listener, err := net.Listen("tcp", address)
+func (server *Server) getPlayers(c *gin.Context) {
+	roomId := c.Param("roomId")
+	roomUUID, err := uuid.Parse(roomId)
 	if err != nil {
-		return false
-	}
-	listener.Close()
-	return true
-}
-
-func decompressAP(apPath string) (ArchipelagoFile, error) {
-	cmd := exec.Command("python3", "decompress_ap.py", apPath)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	var result ArchipelagoFile
-	if err := cmd.Run(); err != nil {
-		return result, fmt.Errorf("python script failed: %w, stderr: %s", err, stderr.String())
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
+		return
 	}
 
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return result, fmt.Errorf("failed to parse python output as JSON: %w, raw output: %s", err, stdout.String())
+	if !server.processManager.exists(roomUUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
+		return
 	}
 
-	return result, nil
-}
-
-func formatRoomTime(t time.Time, timeZone string) (string, error) {
-	loc, err := time.LoadLocation(timeZone)
+	var archFilePath, extractFolderPath string
+	err = server.db.QueryRow(c.Request.Context(), "SELECT arch_file_path, extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&archFilePath, &extractFolderPath)
 	if err != nil {
-		return "", err
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
+		return
 	}
-	localTime := t.In(loc)
 
-	return localTime.Format("1/2/06 3:04 pm"), nil
+	players, err := getPlayerInfo(archFilePath, extractFolderPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err})
+		return
+	}
+
+	slices.SortFunc(players, func(a, b map[string]string) int {
+		A := a["slot"]
+		B := b["slot"]
+		return strings.Compare(A, B)
+	})
+
+	c.JSON(http.StatusOK, gin.H{"players": players})
 }
 
 func (s *SlotInfo) UnmarshalJSON(data []byte) error {
@@ -489,6 +482,7 @@ func main() {
 	router.PUT("/api/rooms", server.getAllRooms)
 	router.DELETE("/api/delete/:roomId", server.deleteRoom)
 	router.GET("/api/room/:roomId", server.roomInfo)
+	router.GET("/api/players/:roomId", server.getPlayers)
 
 	router.Run(":5001")
 }
