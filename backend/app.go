@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"cmp"
 	"context"
 	"embed"
 	"encoding/json"
@@ -396,17 +397,44 @@ func (server *Server) getPlayers(c *gin.Context) {
 
 	players, err := getPlayerInfo(archFilePath, extractFolderPath)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	slices.SortFunc(players, func(a, b map[string]string) int {
-		A := a["slot"]
-		B := b["slot"]
-		return strings.Compare(A, B)
+	slices.SortFunc(players, func(a, b map[string]any) int {
+		A := a["slot"].(int)
+		B := b["slot"].(int)
+		return cmp.Compare(A, B)
 	})
 
 	c.JSON(http.StatusOK, gin.H{"players": players})
+}
+
+func (server *Server) sendPatchFile(c *gin.Context) {
+	roomId := c.Param("roomId")
+	roomUUID, err := uuid.Parse(roomId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
+		return
+	}
+
+	if !server.processManager.exists(roomUUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
+		return
+	}
+
+	fileName := c.Param("filename")
+
+	var extractFolderPath string
+	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
+		return
+	}
+
+	filePath := filepath.Join(extractFolderPath, fileName)
+
+	c.FileAttachment(filePath, fileName)
 }
 
 func (s *SlotInfo) UnmarshalJSON(data []byte) error {
@@ -483,6 +511,7 @@ func main() {
 	router.DELETE("/api/delete/:roomId", server.deleteRoom)
 	router.GET("/api/room/:roomId", server.roomInfo)
 	router.GET("/api/players/:roomId", server.getPlayers)
+	router.GET("/api/players/:roomId/:filename", server.sendPatchFile)
 
 	router.Run(":5001")
 }
