@@ -6,6 +6,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -351,6 +352,77 @@ func (server *Server) deleteRoom(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "successfully deleted"})
 }
 
+func (server *Server) restartRoom(c *gin.Context) {
+	roomId := c.Param("roomId")
+	roomUUID, err := uuid.Parse(roomId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
+		return
+	}
+
+	var archFilePath, extractFolderPath string
+	var oldport int
+	err = server.db.QueryRow(c.Request.Context(), "SELECT arch_file_path, extract_folder_path, port FROM rooms WHERE room_id = $1", roomId).Scan(&archFilePath, &extractFolderPath, &oldport)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get info from database: %s", err.Error())})
+		return
+	}
+
+	if _, err := os.Stat(archFilePath); errors.Is(err, os.ErrNotExist) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("No archipelago file at path: %s", err.Error())})
+		return
+	}
+
+	if !server.processManager.IsRunning(roomUUID) {
+		if restarting, _ := server.processManager.IsRestarting(roomUUID); restarting {
+			c.JSON(http.StatusNoContent, gin.H{"error": "Server already restarting"})
+			return
+		}
+		server.processManager.SetRestarting(roomUUID, true)
+
+		var port int
+		// Generate ports and find an available one
+		ports := rand.Perm(SERVER_PORT + PORT_RANGE - 1 - SERVER_PORT)
+		ports = append([]int{oldport - SERVER_PORT}, ports...)
+		for _, tryport := range ports {
+			if checkPort(tryport) {
+				port = tryport
+				break
+			}
+		}
+
+		if port == 0 {
+			server.processManager.SetRestarting(roomUUID, false)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not find an available port in range, try again later"})
+			return
+		}
+
+		port += SERVER_PORT
+
+		if port != oldport {
+			_, err = server.db.Exec(c.Request.Context(), "UPDATE rooms SET port = $1 WHERE room_id = $2", port, roomId)
+			if err != nil {
+				server.processManager.SetRestarting(roomUUID, false)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update port in database: " + err.Error()})
+				return
+			}
+		}
+
+		if err = server.processManager.StartServer(roomUUID, archFilePath, extractFolderPath, port); err != nil {
+			server.processManager.SetRestarting(roomUUID, false)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to restart archipelago server: %s", err.Error())})
+			return
+		}
+
+		server.processManager.SetRestarting(roomUUID, false)
+
+		c.JSON(http.StatusOK, gin.H{"message": "Server restarted", "port": port})
+	} else {
+		c.JSON(http.StatusNoContent, gin.H{"error": "Server already running"})
+		return
+	}
+}
+
 func (server *Server) roomInfo(c *gin.Context) {
 	roomId := c.Param("roomId")
 	roomUUID, err := uuid.Parse(roomId)
@@ -491,6 +563,47 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Restart rooms currently in database
+	var oldport int
+	var roomId, extractFolderPath, archFilePath string
+	rows, _ := server.db.Query(context.Background(), "SELECT room_id, port, extract_folder_path, arch_file_path FROM rooms WHERE port >= $1 AND port < $2 AND active = true", SERVER_PORT, SERVER_PORT+PORT_RANGE)
+	_, err = pgx.ForEachRow(rows, []any{&roomId, &oldport, &extractFolderPath, &archFilePath}, func() error {
+		roomUUID, err := uuid.Parse(roomId)
+		if err != nil {
+			return fmt.Errorf("Failed to parse room id to uuid: %s", err.Error())
+		}
+
+		var port int
+		// Generate ports and find an available one
+		ports := rand.Perm(SERVER_PORT + PORT_RANGE - 1 - SERVER_PORT)
+		ports = append([]int{oldport - SERVER_PORT}, ports...)
+		for _, tryport := range ports {
+			if checkPort(tryport) {
+				port = tryport
+				break
+			}
+		}
+
+		if port == 0 {
+			return fmt.Errorf("Could not find an available port for room %s", roomId)
+		}
+
+		port += SERVER_PORT
+
+		if port != oldport {
+			_, err = server.db.Exec(context.Background(), "UPDATE rooms SET port = $1 WHERE room_id = $2", port, roomId)
+			if err != nil {
+				return fmt.Errorf("failed to update port in database: %s", err.Error())
+			}
+		}
+
+		if err = server.processManager.StartServer(roomUUID, archFilePath, extractFolderPath, port); err != nil {
+			return fmt.Errorf("failed to restart archipelago server: %s", err.Error())
+		}
+
+		return nil
+	})
+
 	os.Mkdir(filepath.Join(".", "uploads"), os.ModePerm)
 
 	router := gin.Default()
@@ -512,6 +625,7 @@ func main() {
 	router.GET("/api/room/:roomId", server.roomInfo)
 	router.GET("/api/players/:roomId", server.getPlayers)
 	router.GET("/api/players/:roomId/:filename", server.sendPatchFile)
+	router.PUT("/api/restart/:roomId", server.restartRoom)
 
 	router.Run(":5001")
 }

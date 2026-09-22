@@ -48,8 +48,6 @@ func getPlayerInfo(archFilePath string, extractFolderPath string) ([]map[string]
 						player["patch"] = file.Name()
 					}
 				}
-			} else {
-				fmt.Println(PIndex)
 			}
 		}
 	}

@@ -23,9 +23,10 @@ type ProcessManager struct {
 }
 
 type ArchipelagoServer struct {
-	command  *exec.Cmd
-	stdin    io.WriteCloser
-	logMutex sync.Mutex
+	command    *exec.Cmd
+	stdin      io.WriteCloser
+	logMutex   sync.Mutex
+	restarting bool
 }
 
 func NewProcessManager() *ProcessManager {
@@ -130,6 +131,27 @@ func (m *ProcessManager) SendCommand(roomId uuid.UUID, command string) error {
 	}
 	_, err := server.stdin.Write([]byte(command + "\n"))
 	return err
+}
+
+func (m *ProcessManager) SetRestarting(roomId uuid.UUID, restarting bool) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	server, exists := m.rooms[roomId]
+	if !exists {
+		return fmt.Errorf("No archipelago game with this id")
+	}
+	server.restarting = restarting
+	return nil
+}
+
+func (m *ProcessManager) IsRestarting(roomId uuid.UUID) (bool, error) {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	server, exists := m.rooms[roomId]
+	if !exists {
+		return false, fmt.Errorf("No archipelago game with this id")
+	}
+	return server.restarting, nil
 }
 
 func writeLog(stdout io.ReadCloser, logPath string, m *ProcessManager, roomId uuid.UUID, logMutex *sync.Mutex) {
