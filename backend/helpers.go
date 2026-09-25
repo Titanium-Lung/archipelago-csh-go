@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+type TimeFormat struct {
+	Data struct {
+		TimeZone string `json:"timeZone"`
+	} `json:"data"`
+}
+
 func checkPort(port int) bool {
 	address := fmt.Sprintf(":%d", port)
 	listener, err := net.Listen("tcp", address)

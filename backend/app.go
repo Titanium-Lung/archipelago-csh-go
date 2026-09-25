@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bufio"
 	"cmp"
 	"context"
 	"embed"
@@ -39,12 +40,6 @@ type User struct {
 type Server struct {
 	db             *pgxpool.Pool
 	processManager *ProcessManager
-}
-
-type TimeFormat struct {
-	Data struct {
-		TimeZone string `json:"timeZone"`
-	} `json:"data"`
 }
 
 var user User
@@ -423,6 +418,152 @@ func (server *Server) restartRoom(c *gin.Context) {
 	}
 }
 
+func (server *Server) getLog(c *gin.Context) {
+	roomId := c.Param("roomId")
+	roomUUID, err := uuid.Parse(roomId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
+		return
+	}
+
+	if !server.processManager.exists(roomUUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
+		return
+	}
+
+	var extractFolderPath string
+	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
+		return
+	}
+
+	logFile := extractFolderPath + "/server-log.txt"
+	file, err := os.Open(logFile)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to open log file: %s", err.Error())})
+		return
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if err = scanner.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to read log file: %s", err.Error())})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"lines": lines})
+}
+
+func (server *Server) serverCommand(c *gin.Context) {
+	roomId := c.Param("roomId")
+	roomUUID, err := uuid.Parse(roomId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
+		return
+	}
+
+	if !server.processManager.exists(roomUUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
+		return
+	}
+
+	if !server.processManager.IsRunning(roomUUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Archipelago server not running"})
+		return
+	}
+
+	var admin string
+	err = server.db.QueryRow(c.Request.Context(), "SELECT admin FROM rooms WHERE room_id = $1", roomId).Scan(&admin)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
+		return
+	}
+
+	// check if the user is the admin
+
+	var data map[string]any
+
+	if err = c.BindJSON(&data); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get command from JSON: %s", err.Error())})
+		return
+	}
+
+	command := data["command"].(string)
+	err = server.processManager.SendCommand(roomUUID, command)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to send command to server: %s", err.Error())})
+		return
+	}
+
+	if args := strings.Split(command, " "); len(args) >= 2 && strings.HasPrefix(command, "/release") {
+		gameName := strings.TrimSpace(strings.ToLower(command[strings.Index(command, " "):]))
+		server.db.Exec(c.Request.Context(), "INSERT INTO released_games VALUES ($1, $2)", gameName, roomId)
+	}
+}
+
+func (server *Server) streamLog(c *gin.Context) {
+	roomId := c.Param("roomId")
+	roomUUID, err := uuid.Parse(roomId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
+		return
+	}
+
+	if !server.processManager.exists(roomUUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
+		return
+	}
+
+	var extractFolderPath string
+	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
+		return
+	}
+
+	logFile := extractFolderPath + "/server-log.txt"
+	file, err := os.Open(logFile)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to open log file: %s", err.Error())})
+		return
+	}
+	defer file.Close()
+
+	if _, err = file.Seek(0, io.SeekEnd); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to read log file: %s", err.Error())})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	reader := bufio.NewReader(file)
+	var partial strings.Builder
+
+	c.Stream(func(w io.Writer) bool {
+		line, err := reader.ReadString('\n')
+		partial.WriteString(line)
+
+		if err != nil {
+			time.Sleep(500 * time.Millisecond)
+			return true
+		}
+
+		full := strings.TrimRight(partial.String(), "\n")
+		partial.Reset()
+
+		fmt.Fprintf(w, "data: %s\n\n", full)
+		return true
+	})
+}
+
 func (server *Server) roomInfo(c *gin.Context) {
 	roomId := c.Param("roomId")
 	roomUUID, err := uuid.Parse(roomId)
@@ -626,6 +767,9 @@ func main() {
 	router.GET("/api/players/:roomId", server.getPlayers)
 	router.GET("/api/players/:roomId/:filename", server.sendPatchFile)
 	router.PUT("/api/restart/:roomId", server.restartRoom)
+	router.GET("/api/log/:roomId", server.getLog)
+	router.GET("/api/log/stream/:roomId", server.streamLog)
+	router.POST("/api/command/:roomId", server.serverCommand)
 
 	router.Run(":5001")
 }
