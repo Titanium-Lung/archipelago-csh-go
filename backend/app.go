@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -650,24 +649,6 @@ func (server *Server) sendPatchFile(c *gin.Context) {
 	c.FileAttachment(filePath, fileName)
 }
 
-func (s *SlotInfo) UnmarshalJSON(data []byte) error {
-	var raw []json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	if len(raw) < 4 {
-		return fmt.Errorf("slot_info entry: expected 4 elements, got %d", len(raw))
-	}
-
-	if err := json.Unmarshal(raw[0], &s.SlotName); err != nil {
-		return fmt.Errorf("slot_info name: %w", err)
-	}
-	if err := json.Unmarshal(raw[1], &s.Game); err != nil {
-		return fmt.Errorf("slot_info game: %w", err)
-	}
-	return nil
-}
-
 func runMigrations(databaseURL string) error {
 	source, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
@@ -770,6 +751,7 @@ func main() {
 	router.GET("/api/log/:roomId", server.getLog)
 	router.GET("/api/log/stream/:roomId", server.streamLog)
 	router.POST("/api/command/:roomId", server.serverCommand)
+	router.GET("/api/tracker/:roomId", server.multiworldData)
 
 	router.Run(":5001")
 }

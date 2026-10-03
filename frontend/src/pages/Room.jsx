@@ -100,6 +100,8 @@ function Room() {
 
             if (response.ok) {
                 setPlayers(result.players)
+            } else {
+                console.log(result.error)
             }
         }
         fetchPlayers()

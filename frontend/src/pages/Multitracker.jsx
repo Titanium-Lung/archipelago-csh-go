@@ -42,6 +42,8 @@ function Multitracker() {
                 setHints(result.hints)
                 setFilteredHints(result.hints)
                 setPort(result.port)
+            } else {
+                console.log(result.error)
             }
         }
         fetchMultiworld()

@@ -44,6 +44,25 @@ func decompressAP(apPath string) (ArchipelagoFile, error) {
 	return result, nil
 }
 
+func decompressAPSave(apPath string) (ArchipelagoSaveFile, error) {
+	cmd := exec.Command("python3", "decompress_apsave.py", apPath)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	var result ArchipelagoSaveFile
+	if err := cmd.Run(); err != nil {
+		return result, fmt.Errorf("python script failed: %w, stderr: %s", err, stderr.String())
+	}
+
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		return result, fmt.Errorf("failed to parse python output as JSON: %w, raw output: %s", err, stdout.String())
+	}
+
+	return result, nil
+}
+
 func formatRoomTime(t time.Time, timeZone string) (string, error) {
 	loc, err := time.LoadLocation(timeZone)
 	if err != nil {
