@@ -289,7 +289,7 @@ function Room() {
             </div>
             {
                 players.length > 0 ? (
-                    <div className="d-flex justify-content-center mx-md-5">
+                    <div className="d-flex justify-content-center table-wide mx-md-5">
                         <table className="table table-bordered">
                             <thead>
                                 <tr className="table-primary">
