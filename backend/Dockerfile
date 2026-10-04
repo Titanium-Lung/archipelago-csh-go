@@ -15,8 +15,7 @@ COPY requirements.txt .
 RUN uv pip install --system --no-cache -r requirements.txt
 
 COPY --from=builder /out/archipelago ./archipelago
-COPY decompress_ap.py .
-COPY decompress_apsave.py .
+COPY ./pyscripts ./pyscripts
 COPY ./Archipelago-0.6.7 ./Archipelago-0.6.7
 
 EXPOSE 5001

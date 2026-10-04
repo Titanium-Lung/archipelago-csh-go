@@ -42,9 +42,11 @@ type Server struct {
 }
 
 var user User
-var UPLOADS = "./uploads"
-var SERVER_PORT = 38281
-var PORT_RANGE = 20
+
+const UPLOADS = "./uploads"
+const SCRIPTS = "./pyscripts"
+const SERVER_PORT = 38281
+const PORT_RANGE = 20
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS

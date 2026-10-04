@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"path/filepath"
 	"time"
 )
 
@@ -26,7 +27,8 @@ func checkPort(port int) bool {
 }
 
 func decompressAP(apPath string) (ArchipelagoFile, error) {
-	cmd := exec.Command("python3", "decompress_ap.py", apPath)
+	scriptPath := filepath.Join(SCRIPTS, "decompress_ap.py")
+	cmd := exec.Command("python3", scriptPath, apPath)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -45,7 +47,8 @@ func decompressAP(apPath string) (ArchipelagoFile, error) {
 }
 
 func decompressAPSave(apPath string) (ArchipelagoSaveFile, error) {
-	cmd := exec.Command("python3", "decompress_apsave.py", apPath)
+	scriptPath := filepath.Join(SCRIPTS, "decompress_apsave.py")
+	cmd := exec.Command("python3", scriptPath, apPath)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
