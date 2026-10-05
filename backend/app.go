@@ -255,6 +255,12 @@ func (server *Server) uploadFile(c *gin.Context) {
 		return
 	}
 
+	err = server.processManager.SetArchipelagoFile(roomId, &decodedArch)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to set archipelago file: %s", err.Error())})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Server started",
 		"port":    port,
@@ -324,7 +330,7 @@ func (server *Server) deleteRoom(c *gin.Context) {
 		return
 	}
 
-	// check if current user is admin
+	// TODO: check if current user is admin
 
 	roomUUID, err := uuid.Parse(roomId)
 	if err != nil {
@@ -427,7 +433,7 @@ func (server *Server) getLog(c *gin.Context) {
 		return
 	}
 
-	if !server.processManager.exists(roomUUID) {
+	if !server.processManager.Exists(roomUUID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
 		return
 	}
@@ -439,7 +445,7 @@ func (server *Server) getLog(c *gin.Context) {
 		return
 	}
 
-	logFile := extractFolderPath + "/server-log.txt"
+	logFile := filepath.Join(extractFolderPath, "server-log.txt")
 	file, err := os.Open(logFile)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to open log file: %s", err.Error())})
@@ -468,7 +474,7 @@ func (server *Server) serverCommand(c *gin.Context) {
 		return
 	}
 
-	if !server.processManager.exists(roomUUID) {
+	if !server.processManager.Exists(roomUUID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
 		return
 	}
@@ -485,11 +491,11 @@ func (server *Server) serverCommand(c *gin.Context) {
 		return
 	}
 
-	// check if the user is the admin
+	// TODO: check if the user is the admin
 
 	var data map[string]any
 
-	if err = c.BindJSON(&data); err != nil {
+	if err = c.ShouldBindJSON(&data); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get command from JSON: %s", err.Error())})
 		return
 	}
@@ -515,7 +521,7 @@ func (server *Server) streamLog(c *gin.Context) {
 		return
 	}
 
-	if !server.processManager.exists(roomUUID) {
+	if !server.processManager.Exists(roomUUID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
 		return
 	}
@@ -527,7 +533,7 @@ func (server *Server) streamLog(c *gin.Context) {
 		return
 	}
 
-	logFile := extractFolderPath + "/server-log.txt"
+	logFile := filepath.Join(extractFolderPath, "server-log.txt")
 	file, err := os.Open(logFile)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to open log file: %s", err.Error())})
@@ -573,7 +579,7 @@ func (server *Server) roomInfo(c *gin.Context) {
 		return
 	}
 
-	if !server.processManager.exists(roomUUID) {
+	if !server.processManager.Exists(roomUUID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
 		return
 	}
@@ -597,19 +603,25 @@ func (server *Server) getPlayers(c *gin.Context) {
 		return
 	}
 
-	if !server.processManager.exists(roomUUID) {
+	if !server.processManager.Exists(roomUUID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
 		return
 	}
 
-	var archFilePath, extractFolderPath string
-	err = server.db.QueryRow(c.Request.Context(), "SELECT arch_file_path, extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&archFilePath, &extractFolderPath)
+	var extractFolderPath string
+	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
 		return
 	}
 
-	players, err := getPlayerInfo(archFilePath, extractFolderPath)
+	archFile, err := server.processManager.GetArchipelagoFile(roomUUID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get archipelago file: %s", err.Error())})
+		return
+	}
+
+	players, err := GetPlayerInfo(archFile, extractFolderPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -632,7 +644,7 @@ func (server *Server) sendPatchFile(c *gin.Context) {
 		return
 	}
 
-	if !server.processManager.exists(roomUUID) {
+	if !server.processManager.Exists(roomUUID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
 		return
 	}

@@ -27,6 +27,7 @@ type ArchipelagoServer struct {
 	stdin      io.WriteCloser
 	logMutex   sync.Mutex
 	restarting bool
+	archFile   *ArchipelagoFile
 }
 
 func NewProcessManager() *ProcessManager {
@@ -88,7 +89,7 @@ func (m *ProcessManager) markStopped(roomId uuid.UUID) {
 	delete(m.rooms, roomId)
 }
 
-func (m *ProcessManager) exists(roomId uuid.UUID) bool {
+func (m *ProcessManager) Exists(roomId uuid.UUID) bool {
 	m.mutex.RLock()
 	_, exists := m.rooms[roomId]
 	m.mutex.RUnlock()
@@ -152,6 +153,27 @@ func (m *ProcessManager) IsRestarting(roomId uuid.UUID) (bool, error) {
 		return false, fmt.Errorf("No archipelago game with this id")
 	}
 	return server.restarting, nil
+}
+
+func (m *ProcessManager) SetArchipelagoFile(roomId uuid.UUID, file *ArchipelagoFile) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	server, exists := m.rooms[roomId]
+	if !exists {
+		return fmt.Errorf("No archipelago game with this id")
+	}
+	server.archFile = file
+	return nil
+}
+
+func (m *ProcessManager) GetArchipelagoFile(roomId uuid.UUID) (*ArchipelagoFile, error) {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	server, exists := m.rooms[roomId]
+	if !exists {
+		return nil, fmt.Errorf("No archipelago game with this id")
+	}
+	return server.archFile, nil
 }
 
 func writeLog(stdout io.ReadCloser, logPath string, m *ProcessManager, roomId uuid.UUID, logMutex *sync.Mutex) {

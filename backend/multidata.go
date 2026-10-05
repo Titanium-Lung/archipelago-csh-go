@@ -13,11 +13,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func getPlayerInfo(archFilePath string, extractFolderPath string) ([]map[string]any, error) {
-	decodedArch, err := decompressAP(archFilePath)
-	if err != nil {
-		return []map[string]any{}, fmt.Errorf("Failed to decompress archipelago file: %w", err)
-	}
+func GetPlayerInfo(decodedArch *ArchipelagoFile, extractFolderPath string) ([]map[string]any, error) {
+	// decodedArch, err := decompressAP(archFilePath)
+	// if err != nil {
+	// 	return []map[string]any{}, fmt.Errorf("Failed to decompress archipelago file: %w", err)
+	// }
 
 	var players []map[string]any
 	for slotId, slotInfo := range decodedArch.SlotInfo {
@@ -68,14 +68,14 @@ func (server *Server) multiworldData(c *gin.Context) {
 		return
 	}
 
-	if !server.processManager.exists(roomUUID) {
+	if !server.processManager.Exists(roomUUID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
 		return
 	}
 
-	var archFilePath, extractFolderPath string
+	var extractFolderPath string
 	var port int
-	err = server.db.QueryRow(c.Request.Context(), "SELECT arch_file_path, extract_folder_path, port FROM rooms WHERE room_id = $1", roomId).Scan(&archFilePath, &extractFolderPath, &port)
+	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path, port FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath, &port)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
 		return
@@ -87,9 +87,9 @@ func (server *Server) multiworldData(c *gin.Context) {
 		return
 	}
 
-	decodedArch, err := decompressAP(archFilePath)
+	decodedArch, err := server.processManager.GetArchipelagoFile(roomUUID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to decompress archipelago file: %s", err.Error())})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get archipelago file: %s", err.Error())})
 		return
 	}
 
