@@ -737,8 +737,21 @@ func main() {
 			return fmt.Errorf("failed to restart archipelago server: %s", err.Error())
 		}
 
+		decodedArch, err := decompressAP(archFilePath)
+		if err != nil {
+			return fmt.Errorf("failed to decompress archipelago file")
+		}
+		err = server.processManager.SetArchipelagoFile(roomUUID, &decodedArch)
+		if err != nil {
+			return fmt.Errorf("failed to set decoded archipelago file: %s", err.Error())
+		}
+
 		return nil
 	})
+
+	if err != nil {
+		fmt.Println(err)
+	}
 
 	os.Mkdir(filepath.Join(".", "uploads"), os.ModePerm)
 
