@@ -16,7 +16,7 @@ RUN uv pip install --system --no-cache -r requirements.txt
 
 COPY --from=builder /out/archipelago ./archipelago
 COPY ./pyscripts ./pyscripts
-COPY ./Archipelago-0.6.7 ./Archipelago-0.6.7
+COPY ./Archipelago-0.6.8 ./Archipelago-0.6.8
 
 EXPOSE 5001
 

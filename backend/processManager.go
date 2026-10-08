@@ -14,7 +14,7 @@ import (
 	"uuid"
 )
 
-var ArchipelagoServerPath = "Archipelago-0.6.7/MultiServer.py"
+var ArchipelagoServerPath = "Archipelago-0.6.8/MultiServer.py"
 var ShutdownTime = 7200
 
 type ProcessManager struct {

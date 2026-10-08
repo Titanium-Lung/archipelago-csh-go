@@ -1,7 +1,7 @@
 import sys
 import json
 import zlib
-sys.path.insert(0, "Archipelago-0.6.7")
+sys.path.insert(0, "Archipelago-0.6.8")
 from Utils import restricted_loads # type: ignore
 
 def make_json_safe(obj):
