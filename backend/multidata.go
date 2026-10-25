@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"uuid"
 
@@ -110,7 +112,7 @@ func (server *Server) multiworldData(c *gin.Context) {
 	totalChecked := 0
 	gamesComplete := 0
 	recentActivity := "None"
-	// recentActivityDt := time.Now().Sub(time.Unix(0, 0))
+	recentActivityDt := time.Since(time.Unix(0, 0))
 
 	files, err := os.ReadDir(extractFolderPath)
 	if err != nil {
@@ -130,9 +132,9 @@ func (server *Server) multiworldData(c *gin.Context) {
 
 				apsave = true
 
-				playerActivity := make(map[PlayerTuple]float64)
+				playerActivities := make(map[PlayerTuple]float64)
 				for _, clientActivityTimer := range decodedApsave.ClientActivityTimers {
-					playerActivity[clientActivityTimer.PlayerTuple] = clientActivityTimer.Timer
+					playerActivities[clientActivityTimer.PlayerTuple] = clientActivityTimer.Timer
 				}
 
 				for _, player := range players {
@@ -155,9 +157,27 @@ func (server *Server) multiworldData(c *gin.Context) {
 
 					player["percent_checked"] = float64(checked) / float64(checks) * 100
 
+					if playerActivity, exists := playerActivities[playerTuple]; exists {
+						timeStamp := time.Unix(int64(playerActivity), 0)
+						fmt.Println(timeStamp)
+						timeDiff := time.Since(timeStamp)
+
+						hours := timeDiff / time.Hour
+						minutes := (timeDiff % time.Hour) / time.Minute
+
+						player["last_activity"] = fmt.Sprintf("%02d:%02d", hours, minutes)
+						player["last_activity_num"] = timeDiff.Seconds()
+
+						if recentActivityDt > timeDiff {
+							recentActivity = fmt.Sprintf("%02d:%02d", hours, minutes)
+							recentActivityDt = timeDiff
+						}
+					} else {
+						player["last_activity"] = "None"
+						player["last_activity_num"] = math.MaxInt
+					}
+
 					// Temporary
-					player["last_activity"] = "None"
-					player["last_activity_num"] = 1000000
 					player["status"] = 0
 				}
 			}
@@ -171,7 +191,7 @@ func (server *Server) multiworldData(c *gin.Context) {
 
 			player["checks_found"] = 0
 			player["last_activity"] = "None"
-			player["last_activity_num"] = 1000000
+			player["last_activity_num"] = math.MaxInt
 			player["status"] = 0
 			player["percent_checked"] = 0
 		}
