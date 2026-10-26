@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"uuid"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
 )
 
 func GetPlayerInfo(decodedArch *ArchipelagoFile, extractFolderPath string) ([]map[string]any, error) {
@@ -82,8 +84,8 @@ func (server *Server) multiworldData(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
 		return
 	}
-	// rows, _ := server.db.Query(c.Request.Context(), "SELECT name FROM released_games WHERE room_id = $1", roomId)
-	// releasedGames, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	rows, _ := server.db.Query(c.Request.Context(), "SELECT name FROM released_games WHERE room_id = $1", roomId)
+	releasedGames, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
 		return
@@ -177,8 +179,20 @@ func (server *Server) multiworldData(c *gin.Context) {
 						player["last_activity_num"] = math.MaxInt
 					}
 
-					// Temporary
-					player["status"] = 0
+					if status, exists := decodedApsave.ClientGameState[playerTuple]; exists {
+						player["status"] = status
+						if status == 30 {
+							gamesComplete += 1
+						} else if slices.Contains(releasedGames, strings.ToLower(player["name"].(string))) {
+							player["status"] = 25
+						}
+					} else {
+						if slices.Contains(releasedGames, strings.ToLower(player["name"].(string))) {
+							player["status"] = 25
+						} else {
+							player["status"] = 0
+						}
+					}
 				}
 			}
 		}
