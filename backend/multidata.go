@@ -231,7 +231,10 @@ func (server *Server) multiworldData(c *gin.Context) {
 				}
 
 				batchResult := server.db.SendBatch(c.Request.Context(), &hintQueries)
-				batchResult.Close()
+				if err = batchResult.Close(); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to scan hint data from database row: %s", err.Error())})
+					return
+				}
 			}
 		}
 	}
