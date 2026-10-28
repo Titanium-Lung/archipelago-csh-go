@@ -71,6 +71,8 @@ function Tracker() {
 
                 setSlotName(result.name)
                 setAssigned(result.uuid)
+            } else {
+                console.log(result.error)
             }
         }
         fetchItems()

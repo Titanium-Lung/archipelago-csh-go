@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"math"
 	"net/http"
@@ -262,5 +263,111 @@ func (server *Server) multiworldData(c *gin.Context) {
 		"totals":  totals,
 		"hints":   hintList,
 		"port":    port,
+	})
+}
+
+func (server *Server) individualPlayerData(c *gin.Context) {
+	roomId := c.Param("roomId")
+	roomUUID, err := uuid.Parse(roomId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
+		return
+	}
+
+	if !server.processManager.Exists(roomUUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
+		return
+	}
+
+	slot := c.Param("slot")
+
+	var extractFolderPath string
+	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
+		return
+	}
+
+	decodedArch, err := server.processManager.GetArchipelagoFile(roomUUID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get archipelago file: %s", err.Error())})
+		return
+	}
+
+	items := make(map[string]map[string]any, 0)
+	locations := make([]map[string]any, 0)
+	hintList := make([]map[string]any, 0)
+	var name string
+	var playerUuid sql.NullString
+
+	var locationName, locationId string
+	locationRows, err := server.db.Query(c.Request.Context(), "SELECT location_name, location_id FROM locations WHERE room_id = $1 AND slot = $2", roomId, slot)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
+		return
+	}
+	_, err = pgx.ForEachRow(locationRows, []any{&locationName, &locationId}, func() error {
+		location := make(map[string]any)
+		location["name"] = locationName
+		location["checked"] = false
+		location["number"] = locationId
+		locations = append(locations, location)
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to put locations into list: %s", err.Error())})
+		return
+	}
+
+	itemInfos := make(map[string]map[string]string)
+	var itemid, itemname string
+	var locationsChecked int
+	itemRows, _ := server.db.Query(c.Request.Context(), "SELECT i.id, i.name, s.name, s.player_uuid, s.checks FROM items as i, slots as s WHERE i.room_id = $1 AND s.room_id = i.room_id AND s.id = $2 AND i.game = s.game", roomId, slot)
+	_, err = pgx.ForEachRow(itemRows, []any{&itemid, &itemname, &name, &playerUuid, &locationsChecked}, func() error {
+		itemInfos[itemid] = make(map[string]string)
+		itemInfos[itemid]["name"] = itemname
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to put precollected items into list: %s", err.Error())})
+		return
+	}
+
+	for index, itemid := range decodedArch.PrecollectedItems[slot] {
+		itemidstr := strconv.Itoa(itemid)
+		itemName := itemInfos[itemidstr]["name"]
+		if _, exists := items[itemidstr]; exists {
+			items[itemName]["count"] = items[itemidstr]["count"].(int) + 1
+		} else {
+			items[itemName] = make(map[string]any)
+			items[itemName]["count"] = 1
+		}
+		items[itemName]["last_order_received"] = index + 1
+	}
+
+	// files, err := os.ReadDir(extractFolderPath)
+	// if err != nil {
+	// 	c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to read extract folder: %s", err.Error())})
+	// 	return
+	// }
+	// for _, file := range files {
+	// 	if !file.IsDir() {
+	// 		if strings.HasSuffix(file.Name(), ".apsave") {
+	// 			// decompress apsave
+	// 			decodedApsave, err := decompressAPSave(filepath.Join(extractFolderPath, file.Name()))
+	// 			if err != nil {
+	// 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to decompress apsave file: %s", err.Error())})
+	// 				return
+	// 			}
+	// 		}
+	// 	}
+	// }
+
+	c.JSON(http.StatusOK, gin.H{
+		"items":     items,
+		"locations": locations,
+		"hints":     hintList,
+		"name":      name,
+		"uuid":      playerUuid,
 	})
 }

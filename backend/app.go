@@ -779,6 +779,7 @@ func main() {
 	router.GET("/api/log/stream/:roomId", server.streamLog)
 	router.POST("/api/command/:roomId", server.serverCommand)
 	router.GET("/api/tracker/:roomId", server.multiworldData)
+	router.GET("/api/tracker/:roomId/:slot", server.individualPlayerData)
 
 	router.Run(":5001")
 }
