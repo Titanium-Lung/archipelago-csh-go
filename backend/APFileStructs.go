@@ -78,8 +78,8 @@ type PlayerTuple struct {
 type Hint struct {
 	ReceivingPlayer int
 	FindingPlayer   int
-	Location        string
-	Item            string
+	Location        int
+	Item            int
 	Found           bool
 	Entrance        string
 	ItemFlags       int

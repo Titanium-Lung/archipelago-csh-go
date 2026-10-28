@@ -108,7 +108,7 @@ func (server *Server) multiworldData(c *gin.Context) {
 	}
 
 	// var hints []map[string]string
-	hints := make([]map[string]string, 0)
+	hintList := make([]map[string]any, 0)
 
 	totalChecks := 0
 	totalChecked := 0
@@ -161,7 +161,6 @@ func (server *Server) multiworldData(c *gin.Context) {
 
 					if playerActivity, exists := playerActivities[playerTuple]; exists {
 						timeStamp := time.Unix(int64(playerActivity), 0)
-						fmt.Println(timeStamp)
 						timeDiff := time.Since(timeStamp)
 
 						hours := timeDiff / time.Hour
@@ -194,6 +193,44 @@ func (server *Server) multiworldData(c *gin.Context) {
 						}
 					}
 				}
+
+				var hintQueries pgx.Batch
+				for player, hints := range decodedApsave.Hints {
+					slot := player.Slot
+					for _, hintInfo := range hints {
+						if hintInfo.FindingPlayer == slot {
+							queuedQuery := hintQueries.Queue("SELECT location_name, to_name, from_name, item_name, game FROM locations WHERE room_id = $1 AND slot = $2 AND location_id = $3", roomId, slot, strconv.Itoa(hintInfo.Location))
+							queuedQuery.QueryRow(func(row pgx.Row) error {
+								var locationName, toName, fromName, itemName, game string
+								if err := row.Scan(&locationName, &toName, &fromName, &itemName, &game); err != nil {
+									return err
+								}
+
+								hint := make(map[string]any)
+
+								hint["location"] = locationName
+								hint["receiving_player"] = toName
+								hint["finding_player"] = fromName
+								hint["item"] = itemName
+								hint["game"] = game
+								if hintInfo.Entrance == "" {
+									hint["entrance"] = "Vanilla"
+								} else {
+									hint["entrance"] = hintInfo.Entrance
+								}
+								hint["found"] = hintInfo.Found
+
+								hintList = append(hintList, hint)
+
+								return nil
+							})
+
+						}
+					}
+				}
+
+				batchResult := server.db.SendBatch(c.Request.Context(), &hintQueries)
+				batchResult.Close()
 			}
 		}
 	}
@@ -216,14 +253,14 @@ func (server *Server) multiworldData(c *gin.Context) {
 		"total_checked":            totalChecked,
 		"games_complete":           gamesComplete,
 		"num_players":              len(players),
-		"num_players_not_released": len(players),
+		"num_players_not_released": len(players) - len(releasedGames),
 		"recent_activity":          recentActivity,
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"players": players,
 		"totals":  totals,
-		"hints":   hints,
+		"hints":   hintList,
 		"port":    port,
 	})
 }
