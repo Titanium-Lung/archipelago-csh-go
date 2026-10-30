@@ -780,6 +780,7 @@ func main() {
 	router.POST("/api/command/:roomId", server.serverCommand)
 	router.GET("/api/tracker/:roomId", server.multiworldData)
 	router.GET("/api/tracker/:roomId/:slot", server.individualPlayerData)
+	router.GET("/api/spheres/:roomId", server.SphereData)
 
 	router.Run(":5001")
 }

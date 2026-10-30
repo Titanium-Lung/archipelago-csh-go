@@ -459,3 +459,79 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 		"uuid":      playerUuid,
 	})
 }
+
+func (server *Server) SphereData(c *gin.Context) {
+	roomId := c.Param("roomId")
+	roomUUID, err := uuid.Parse(roomId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
+		return
+	}
+
+	if !server.processManager.Exists(roomUUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
+		return
+	}
+
+	var extractFolderPath string
+	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
+		return
+	}
+
+	items := make([]map[string]any, 0)
+
+	files, err := os.ReadDir(extractFolderPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to read extract folder: %s", err.Error())})
+		return
+	}
+	for _, file := range files {
+		if !file.IsDir() {
+			if strings.HasSuffix(file.Name(), ".apsave") {
+				// decompress apsave
+				decodedApsave, err := decompressAPSave(filepath.Join(extractFolderPath, file.Name()))
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to decompress apsave file: %s", err.Error())})
+					return
+				}
+
+				var locationBatch pgx.Batch
+				for player, locationChecks := range decodedApsave.LocationChecks {
+					for _, locationId := range locationChecks {
+						queuedQuery := locationBatch.Queue("SELECT sphere, from_name, to_name, location_name, item_name, game FROM locations WHERE room_id = $1 AND slot = $2 AND location_id = $3", roomId, player.Slot, strconv.Itoa(locationId))
+						queuedQuery.QueryRow(func(row pgx.Row) error {
+							var sphere int
+							var fromName, toName, locationName, itemName, game string
+							if err := row.Scan(&sphere, &fromName, &toName, &locationName, &itemName, &game); err != nil {
+								return err
+							}
+
+							item := make(map[string]any)
+							item["sphere"] = sphere
+							item["from"] = fromName
+							item["to"] = toName
+							item["location_name"] = locationName
+							item["item_name"] = itemName
+							item["game"] = game
+
+							items = append(items, item)
+
+							return nil
+						})
+					}
+				}
+				batchResult := server.db.SendBatch(c.Request.Context(), &locationBatch)
+				if err = batchResult.Close(); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to send batch of requests to database: %s", err.Error())})
+					return
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items": items,
+	})
+}
