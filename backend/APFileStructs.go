@@ -59,10 +59,11 @@ func newIdsToNames() *IdsToNames {
 }
 
 type ArchipelagoSaveFile struct {
-	ClientActivityTimers []ClientActivityTimer  `json:"client_activity_timers"`
-	LocationChecks       map[PlayerTuple][]int  `json:"location_checks"`
-	ClientGameState      map[PlayerTuple]int    `json:"client_game_state"`
-	Hints                map[PlayerTuple][]Hint `json:"hints"`
+	ClientActivityTimers []ClientActivityTimer                  `json:"client_activity_timers"`
+	LocationChecks       map[PlayerTuple][]int                  `json:"location_checks"`
+	ClientGameState      map[PlayerTuple]int                    `json:"client_game_state"`
+	Hints                map[PlayerTuple][]Hint                 `json:"hints"`
+	ReceivedItems        map[ExpandedPlayerTuple][]ReceivedItem `json:"received_items"`
 }
 
 type ClientActivityTimer struct {
@@ -75,6 +76,12 @@ type PlayerTuple struct {
 	Slot int
 }
 
+type ExpandedPlayerTuple struct {
+	Team  int
+	Slot  int
+	Local bool
+}
+
 type Hint struct {
 	ReceivingPlayer int
 	FindingPlayer   int
@@ -84,6 +91,28 @@ type Hint struct {
 	Entrance        string
 	ItemFlags       int
 	Status          int
+}
+
+type ReceivedItem struct {
+	ItemId     int
+	LocationId int
+	PlayerSlot int
+	Flags      int
+}
+
+func NewPlayerTuple(team int, slot int) *PlayerTuple {
+	return &PlayerTuple{
+		Team: team,
+		Slot: slot,
+	}
+}
+
+func NewExpandedPlayerTuple(team int, slot int, local bool) *ExpandedPlayerTuple {
+	return &ExpandedPlayerTuple{
+		Team:  team,
+		Slot:  slot,
+		Local: local,
+	}
 }
 
 func (c *ClientActivityTimer) UnmarshalJSON(data []byte) error {
@@ -131,6 +160,30 @@ func (p *PlayerTuple) UnmarshalText(text []byte) error {
 	return nil
 }
 
+func (p *ExpandedPlayerTuple) UnmarshalText(text []byte) error {
+	parts := strings.Split(string(text), ",")
+	if len(parts) != 3 {
+		return fmt.Errorf("Expected 3 elements, got %d", len(parts))
+	}
+	team, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return err
+	}
+	slot, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return err
+	}
+	local, err := strconv.ParseBool(parts[2])
+	if err != nil {
+		return err
+	}
+	p.Team = team
+	p.Slot = slot
+	p.Local = local
+
+	return nil
+}
+
 func (h *Hint) UnmarshalJSON(data []byte) error {
 	var raw []json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -162,6 +215,31 @@ func (h *Hint) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if err := json.Unmarshal(raw[7], &h.Status); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *ReceivedItem) UnmarshalJSON(data []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw) != 4 {
+		return fmt.Errorf("hint: expected 4 elements, got %d", len(raw))
+	}
+
+	if err := json.Unmarshal(raw[0], &r.ItemId); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(raw[1], &r.LocationId); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(raw[2], &r.PlayerSlot); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(raw[3], &r.Flags); err != nil {
 		return err
 	}
 

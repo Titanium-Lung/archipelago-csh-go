@@ -283,6 +283,11 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 	}
 
 	slot := c.Param("slot")
+	slotint, err := strconv.Atoi(slot)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to convert slot to int: %s", err.Error())})
+		return
+	}
 
 	var extractFolderPath string
 	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
@@ -336,7 +341,8 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 		return
 	}
 
-	for index, itemid := range decodedArch.PrecollectedItems[slot] {
+	count := 1
+	for _, itemid := range decodedArch.PrecollectedItems[slot] {
 		itemidstr := strconv.Itoa(itemid)
 		itemName := itemInfos[itemidstr]["name"]
 		if _, exists := items[itemidstr]; exists {
@@ -345,26 +351,46 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 			items[itemName] = make(map[string]any)
 			items[itemName]["count"] = 1
 		}
-		items[itemName]["last_order_received"] = index + 1
+		items[itemName]["last_order_received"] = count
+		count++
 	}
 
-	// files, err := os.ReadDir(extractFolderPath)
-	// if err != nil {
-	// 	c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to read extract folder: %s", err.Error())})
-	// 	return
-	// }
-	// for _, file := range files {
-	// 	if !file.IsDir() {
-	// 		if strings.HasSuffix(file.Name(), ".apsave") {
-	// 			// decompress apsave
-	// 			decodedApsave, err := decompressAPSave(filepath.Join(extractFolderPath, file.Name()))
-	// 			if err != nil {
-	// 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to decompress apsave file: %s", err.Error())})
-	// 				return
-	// 			}
-	// 		}
-	// 	}
-	// }
+	files, err := os.ReadDir(extractFolderPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to read extract folder: %s", err.Error())})
+		return
+	}
+	for _, file := range files {
+		if !file.IsDir() {
+			if strings.HasSuffix(file.Name(), ".apsave") {
+				// decompress apsave
+				decodedApsave, err := decompressAPSave(filepath.Join(extractFolderPath, file.Name()))
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to decompress apsave file: %s", err.Error())})
+					return
+				}
+
+				expandedPlayerTuple := *NewExpandedPlayerTuple(0, slotint, true)
+				// playerTuple := *NewPlayerTuple(0, slotint)
+
+				if receivedItems, exists := decodedApsave.ReceivedItems[expandedPlayerTuple]; exists {
+					for _, item := range receivedItems {
+						itemIdStr := strconv.Itoa(item.ItemId)
+						itemName := itemInfos[itemIdStr]["name"]
+
+						if _, exists := items[itemName]; exists {
+							items[itemName]["count"] = items[itemName]["count"].(int) + 1
+						} else {
+							items[itemName] = make(map[string]any)
+							items[itemName]["count"] = 1
+						}
+						items[itemName]["last_order_received"] = count + 1
+						count++
+					}
+				}
+			}
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"items":     items,
