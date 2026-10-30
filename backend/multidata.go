@@ -371,7 +371,7 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 				}
 
 				expandedPlayerTuple := *NewExpandedPlayerTuple(0, slotint, true)
-				// playerTuple := *NewPlayerTuple(0, slotint)
+				playerTuple := *NewPlayerTuple(0, slotint)
 
 				if receivedItems, exists := decodedApsave.ReceivedItems[expandedPlayerTuple]; exists {
 					for _, item := range receivedItems {
@@ -386,6 +386,65 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 						}
 						items[itemName]["last_order_received"] = count + 1
 						count++
+					}
+				}
+
+				updatedLocationsChecked := 0
+				for _, location := range locations {
+					if locationChecks, exists := decodedApsave.LocationChecks[playerTuple]; exists {
+						locationId, _ := strconv.Atoi(location["number"].(string))
+						if slices.Contains(locationChecks, locationId) {
+							location["checked"] = true
+							updatedLocationsChecked += 1
+						}
+					}
+				}
+
+				if gameState, exists := decodedApsave.ClientGameState[playerTuple]; exists {
+					if updatedLocationsChecked != locationsChecked && gameState != 30 {
+						_, err := server.db.Exec(c.Request.Context(), "UPDATE slots SET checks = $1 WHERE id = $2 AND room_id = $3 AND LOWER(name) NOT IN (SELECT name FROM released_games WHERE room_id = $3)", updatedLocationsChecked, slot, roomId)
+						if err != nil {
+							c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to update locations checked: %s", err.Error())})
+							return
+						}
+					}
+				}
+
+				if hints, exists := decodedApsave.Hints[playerTuple]; exists {
+					var hintQueries pgx.Batch
+					for _, hintInfo := range hints {
+						queuedQuery := hintQueries.Queue("SELECT location_name, to_name, from_name, item_name, game FROM locations WHERE room_id = $1 AND slot = $2 AND location_id = $3", roomId, hintInfo.FindingPlayer, strconv.Itoa(hintInfo.Location))
+						queuedQuery.QueryRow(func(row pgx.Row) error {
+							var locationName, toName, fromName, itemName, game string
+							if err := row.Scan(&locationName, &toName, &fromName, &itemName, &game); err == pgx.ErrNoRows {
+								return nil
+							} else if err != nil {
+								return err
+							}
+
+							hint := make(map[string]any)
+
+							hint["location"] = locationName
+							hint["receiving_player"] = toName
+							hint["finding_player"] = fromName
+							hint["item"] = itemName
+							hint["game"] = game
+							if hintInfo.Entrance == "" {
+								hint["entrance"] = "Vanilla"
+							} else {
+								hint["entrance"] = hintInfo.Entrance
+							}
+							hint["found"] = hintInfo.Found
+
+							hintList = append(hintList, hint)
+
+							return nil
+						})
+					}
+					batchResult := server.db.SendBatch(c.Request.Context(), &hintQueries)
+					if err = batchResult.Close(); err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to scan hint data from database: %s", err.Error())})
+						return
 					}
 				}
 			}
