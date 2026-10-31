@@ -451,13 +451,23 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"items":     items,
-		"locations": locations,
-		"hints":     hintList,
-		"name":      name,
-		"uuid":      playerUuid,
-	})
+	if playerUuid.Valid {
+		c.JSON(http.StatusOK, gin.H{
+			"items":     items,
+			"locations": locations,
+			"hints":     hintList,
+			"name":      name,
+			"uuid":      playerUuid.String,
+		})
+	} else {
+		c.JSON(http.StatusOK, gin.H{
+			"items":     items,
+			"locations": locations,
+			"hints":     hintList,
+			"name":      name,
+			"uuid":      nil,
+		})
+	}
 }
 
 func (server *Server) SphereData(c *gin.Context) {
