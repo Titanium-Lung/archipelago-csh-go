@@ -663,6 +663,45 @@ func (server *Server) sendPatchFile(c *gin.Context) {
 	c.FileAttachment(filePath, fileName)
 }
 
+func (server *Server) assignToSlot(c *gin.Context) {
+	roomId := c.Param("roomId")
+	roomUUID, err := uuid.Parse(roomId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
+		return
+	}
+
+	if !server.processManager.Exists(roomUUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
+		return
+	}
+
+	slot := c.Param("slot")
+	slotint, err := strconv.Atoi(slot)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to convert slot to int: %s", err.Error())})
+		return
+	}
+
+	uuid := "5"
+	switch c.Request.Method {
+	case "PUT":
+		if _, err = server.db.Exec(c.Request.Context(), "UPDATE slots SET player_uuid = $1 WHERE id = $2 AND room_id = $3", uuid, slotint, roomId); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to put assign in database: %s", err.Error())})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Successfully assigned"})
+	case "DELETE":
+		if _, err = server.db.Exec(c.Request.Context(), "UPDATE slots SET player_uuid = $1 WHERE id = $2 AND room_id = $3", nil, slotint, roomId); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to put assign in database: %s", err.Error())})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Successfully UNassigned"})
+	}
+}
+
 func runMigrations(databaseURL string) error {
 	source, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
@@ -781,6 +820,8 @@ func main() {
 	router.GET("/api/tracker/:roomId", server.multiworldData)
 	router.GET("/api/tracker/:roomId/:slot", server.individualPlayerData)
 	router.GET("/api/spheres/:roomId", server.SphereData)
+	router.PUT("/api/assign/:roomId/:slot", server.assignToSlot)
+	router.DELETE("/api/assign/:roomId/:slot", server.assignToSlot)
 
 	router.Run(":5001")
 }
