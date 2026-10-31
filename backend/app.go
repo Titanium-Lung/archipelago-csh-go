@@ -702,6 +702,78 @@ func (server *Server) assignToSlot(c *gin.Context) {
 	}
 }
 
+func (server *Server) getStats(c *gin.Context) {
+	uuid := "5"
+
+	var name, game, roomId, roomName string
+	var checks, slotId int
+	slots := make([]map[string]any, 0)
+	rows, _ := server.db.Query(c.Request.Context(), `SELECT s.name, s.game, s.checks, s.room_id, s.id, r.name 
+		FROM slots as s, rooms as r WHERE s.player_uuid = $1 AND s.room_id = r.room_id ORDER BY r.start DESC`, uuid)
+	_, err := pgx.ForEachRow(rows, []any{&name, &game, &checks, &roomId, &slotId, &roomName}, func() error {
+		slot := make(map[string]any)
+		slot["name"] = name
+		slot["game"] = game
+		slot["checks"] = checks
+		slot["room_id"] = roomId
+		slot["slot"] = slotId
+		slot["room_name"] = roomName
+		slots = append(slots, slot)
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get player's slots from database: %s", err.Error())})
+		return
+	}
+
+	totals := make(map[string]any)
+
+	var totalChecks, numGames, numSessions int
+	if err = server.db.QueryRow(c.Request.Context(), "SELECT SUM(checks), COUNT(*), COUNT(DISTINCT room_id) FROM slots WHERE player_uuid = $1", uuid).Scan(&totalChecks, &numGames, &numSessions); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get totals of games from database: %s", err.Error())})
+		return
+	}
+	totals["checks"] = totalChecks
+	totals["games"] = numGames
+	totals["sessions"] = numSessions
+
+	var avgGames, avgChecks float32
+	if err = server.db.QueryRow(c.Request.Context(), `SELECT AVG(c.games), AVG(c.checks) FROM 
+        	(SELECT COUNT(*) as games, SUM(checks) as checks FROM slots WHERE player_uuid = $1 GROUP BY room_id) as c`, uuid).Scan(&avgGames, &avgChecks); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get averages of games from database: %s", err.Error())})
+		return
+	}
+	totals["average_games"] = avgGames
+	totals["average_checks"] = avgChecks
+
+	sessionTotals := make([]map[string]any, 0)
+
+	var gameCount, checkCount int
+	var avgChecksPerGame float32
+	var sessionName string
+	rows, _ = server.db.Query(c.Request.Context(), `SELECT COUNT(*), AVG(s.checks), SUM(s.checks), r.name 
+                        FROM slots as s, rooms as r WHERE s.player_uuid = $1 AND s.room_id = r.room_id 
+                        GROUP BY r.room_id, r.start ORDER BY r.start DESC`, uuid)
+	if _, err = pgx.ForEachRow(rows, []any{&gameCount, &avgChecksPerGame, &checkCount, &sessionName}, func() error {
+		session := make(map[string]any)
+		session["games"] = gameCount
+		session["average_checks"] = avgChecksPerGame
+		session["checks"] = checkCount
+		session["name"] = sessionName
+		sessionTotals = append(sessionTotals, session)
+		return nil
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get data by session from database: %s", err.Error())})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"slots":          slots,
+		"totals":         totals,
+		"session_totals": sessionTotals,
+	})
+}
+
 func runMigrations(databaseURL string) error {
 	source, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
@@ -822,6 +894,7 @@ func main() {
 	router.GET("/api/spheres/:roomId", server.SphereData)
 	router.PUT("/api/assign/:roomId/:slot", server.assignToSlot)
 	router.DELETE("/api/assign/:roomId/:slot", server.assignToSlot)
+	router.GET("/api/stats", server.getStats)
 
 	router.Run(":5001")
 }
