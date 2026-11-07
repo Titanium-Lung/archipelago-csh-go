@@ -2,11 +2,8 @@ package main
 
 import (
 	"archive/zip"
-	"bufio"
-	"cmp"
 	"context"
 	"embed"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +17,11 @@ import (
 	"time"
 	"uuid"
 
+	helpers "github.com/Titanium-lung/archipelago-csh-go-backend/Helpers"
+	multidata "github.com/Titanium-lung/archipelago-csh-go-backend/Multidata"
+	pm "github.com/Titanium-lung/archipelago-csh-go-backend/ProcessManager"
+	room "github.com/Titanium-lung/archipelago-csh-go-backend/Room"
+	structs "github.com/Titanium-lung/archipelago-csh-go-backend/Structs"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-migrate/migrate/v4"
@@ -38,7 +40,7 @@ type User struct {
 
 type Server struct {
 	db             *pgxpool.Pool
-	processManager *ProcessManager
+	processManager *pm.ProcessManager
 }
 
 var user User
@@ -51,7 +53,7 @@ const PORT_RANGE = 20
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-func NewServer(db *pgxpool.Pool, mngr *ProcessManager) *Server {
+func NewServer(db *pgxpool.Pool, mngr *pm.ProcessManager) *Server {
 	return &Server{db: db, processManager: mngr}
 }
 
@@ -82,7 +84,7 @@ func (server *Server) uploadFile(c *gin.Context) {
 	// Generate ports and find an available one
 	ports := rand.Perm(SERVER_PORT + PORT_RANGE - SERVER_PORT)
 	for _, tryport := range ports {
-		if checkPort(tryport) {
+		if helpers.CheckPort(tryport) {
 			port = tryport
 			break
 		}
@@ -163,15 +165,15 @@ func (server *Server) uploadFile(c *gin.Context) {
 	}
 	roomName := extractFolderPath[strings.Index(extractFolderPath, "/")+1:]
 
-	decodedArch, err := decompressAP(archFilePath)
+	decodedArch, err := helpers.DecompressAP(archFilePath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err})
 		return
 	}
 
-	ids := make(map[string]IdsToNames)
+	ids := make(map[string]structs.IdsToNames)
 	for game, subdict := range decodedArch.Datapackage {
-		ids[game] = *newIdsToNames()
+		ids[game] = *structs.NewIdsToNames()
 		for k, v := range subdict.ItemNameToId {
 			ids[game].IdToItemName[v] = k
 		}
@@ -269,7 +271,7 @@ func (server *Server) uploadFile(c *gin.Context) {
 }
 
 func (server *Server) getAllRooms(c *gin.Context) {
-	var timeFormat TimeFormat
+	var timeFormat helpers.TimeFormat
 	if err := c.ShouldBindJSON(&timeFormat); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -288,7 +290,7 @@ func (server *Server) getAllRooms(c *gin.Context) {
 		room := make(map[string]any)
 		room["room_id"] = roomId
 		room["port"] = port
-		startStr, formatErr := formatRoomTime(start, timeZone)
+		startStr, formatErr := helpers.FormatRoomTime(start, timeZone)
 		if formatErr != nil {
 			return formatErr
 		}
@@ -355,341 +357,51 @@ func (server *Server) deleteRoom(c *gin.Context) {
 }
 
 func (server *Server) restartRoom(c *gin.Context) {
-	roomId := c.Param("roomId")
-	roomUUID, err := uuid.Parse(roomId)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
-		return
-	}
-
-	var archFilePath, extractFolderPath string
-	var oldport int
-	err = server.db.QueryRow(c.Request.Context(), "SELECT arch_file_path, extract_folder_path, port FROM rooms WHERE room_id = $1", roomId).Scan(&archFilePath, &extractFolderPath, &oldport)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get info from database: %s", err.Error())})
-		return
-	}
-
-	if _, err := os.Stat(archFilePath); errors.Is(err, os.ErrNotExist) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("No archipelago file at path: %s", err.Error())})
-		return
-	}
-
-	if !server.processManager.IsRunning(roomUUID) {
-		if restarting, _ := server.processManager.IsRestarting(roomUUID); restarting {
-			c.JSON(http.StatusNoContent, gin.H{"error": "Server already restarting"})
-			return
-		}
-		server.processManager.SetRestarting(roomUUID, true)
-
-		var port int
-		// Generate ports and find an available one
-		ports := rand.Perm(SERVER_PORT + PORT_RANGE - 1 - SERVER_PORT)
-		ports = append([]int{oldport - SERVER_PORT}, ports...)
-		for _, tryport := range ports {
-			if checkPort(tryport) {
-				port = tryport
-				break
-			}
-		}
-
-		if port == 0 {
-			server.processManager.SetRestarting(roomUUID, false)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not find an available port in range, try again later"})
-			return
-		}
-
-		port += SERVER_PORT
-
-		if port != oldport {
-			_, err = server.db.Exec(c.Request.Context(), "UPDATE rooms SET port = $1 WHERE room_id = $2", port, roomId)
-			if err != nil {
-				server.processManager.SetRestarting(roomUUID, false)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update port in database: " + err.Error()})
-				return
-			}
-		}
-
-		if err = server.processManager.StartServer(roomUUID, archFilePath, extractFolderPath, port); err != nil {
-			server.processManager.SetRestarting(roomUUID, false)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to restart archipelago server: %s", err.Error())})
-			return
-		}
-
-		server.processManager.SetRestarting(roomUUID, false)
-
-		c.JSON(http.StatusOK, gin.H{"message": "Server restarted", "port": port})
-	} else {
-		c.JSON(http.StatusNoContent, gin.H{"error": "Server already running"})
-		return
-	}
+	room.RestartRoom(c, server.db, server.processManager, SERVER_PORT, PORT_RANGE)
 }
 
 func (server *Server) getLog(c *gin.Context) {
-	roomId := c.Param("roomId")
-	roomUUID, err := uuid.Parse(roomId)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
-		return
-	}
-
-	if !server.processManager.Exists(roomUUID) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
-		return
-	}
-
-	var extractFolderPath string
-	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
-		return
-	}
-
-	logFile := filepath.Join(extractFolderPath, "server-log.txt")
-	file, err := os.Open(logFile)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to open log file: %s", err.Error())})
-		return
-	}
-	defer file.Close()
-
-	var lines []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-	if err = scanner.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to read log file: %s", err.Error())})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"lines": lines})
+	room.GetLog(c, server.db, server.processManager)
 }
 
 func (server *Server) serverCommand(c *gin.Context) {
-	roomId := c.Param("roomId")
-	roomUUID, err := uuid.Parse(roomId)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
-		return
-	}
-
-	if !server.processManager.Exists(roomUUID) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
-		return
-	}
-
-	if !server.processManager.IsRunning(roomUUID) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Archipelago server not running"})
-		return
-	}
-
-	var admin string
-	err = server.db.QueryRow(c.Request.Context(), "SELECT admin FROM rooms WHERE room_id = $1", roomId).Scan(&admin)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
-		return
-	}
-
-	// TODO: check if the user is the admin
-
-	var data map[string]any
-
-	if err = c.ShouldBindJSON(&data); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get command from JSON: %s", err.Error())})
-		return
-	}
-
-	command := data["command"].(string)
-	err = server.processManager.SendCommand(roomUUID, command)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to send command to server: %s", err.Error())})
-		return
-	}
-
-	if args := strings.Split(command, " "); len(args) >= 2 && strings.HasPrefix(command, "/release") {
-		gameName := strings.TrimSpace(strings.ToLower(command[strings.Index(command, " "):]))
-		server.db.Exec(c.Request.Context(), "INSERT INTO released_games VALUES ($1, $2)", gameName, roomId)
-	}
+	room.ServerCommand(c, server.db, server.processManager)
 }
 
 func (server *Server) streamLog(c *gin.Context) {
-	roomId := c.Param("roomId")
-	roomUUID, err := uuid.Parse(roomId)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
-		return
-	}
-
-	if !server.processManager.Exists(roomUUID) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
-		return
-	}
-
-	var extractFolderPath string
-	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
-		return
-	}
-
-	logFile := filepath.Join(extractFolderPath, "server-log.txt")
-	file, err := os.Open(logFile)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to open log file: %s", err.Error())})
-		return
-	}
-	defer file.Close()
-
-	if _, err = file.Seek(0, io.SeekEnd); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to read log file: %s", err.Error())})
-		return
-	}
-
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Header("X-Accel-Buffering", "no")
-
-	reader := bufio.NewReader(file)
-	var partial strings.Builder
-
-	c.Stream(func(w io.Writer) bool {
-		line, err := reader.ReadString('\n')
-		partial.WriteString(line)
-
-		if err != nil {
-			time.Sleep(500 * time.Millisecond)
-			return true
-		}
-
-		full := strings.TrimRight(partial.String(), "\n")
-		partial.Reset()
-
-		fmt.Fprintf(w, "data: %s\n\n", full)
-		return true
-	})
+	room.StreamLog(c, server.db, server.processManager)
 }
 
 func (server *Server) roomInfo(c *gin.Context) {
-	roomId := c.Param("roomId")
-	roomUUID, err := uuid.Parse(roomId)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
-		return
-	}
-
-	if !server.processManager.Exists(roomUUID) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
-		return
-	}
-
-	var port int
-	var admin, name string
-	err = server.db.QueryRow(c.Request.Context(), "SELECT port, admin, name FROM rooms WHERE room_id = $1", roomId).Scan(&port, &admin, &name)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"port": port, "admin": admin, "name": name})
-}
-
-func (server *Server) getPlayers(c *gin.Context) {
-	roomId := c.Param("roomId")
-	roomUUID, err := uuid.Parse(roomId)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
-		return
-	}
-
-	if !server.processManager.Exists(roomUUID) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
-		return
-	}
-
-	var extractFolderPath string
-	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
-		return
-	}
-
-	archFile, err := server.processManager.GetArchipelagoFile(roomUUID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get archipelago file: %s", err.Error())})
-		return
-	}
-
-	players, err := GetPlayerInfo(archFile, extractFolderPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	slices.SortFunc(players, func(a, b map[string]any) int {
-		A := a["slot"].(int)
-		B := b["slot"].(int)
-		return cmp.Compare(A, B)
-	})
-
-	c.JSON(http.StatusOK, gin.H{"players": players})
+	room.RoomInfo(c, server.db, server.processManager)
 }
 
 func (server *Server) sendPatchFile(c *gin.Context) {
-	roomId := c.Param("roomId")
-	roomUUID, err := uuid.Parse(roomId)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
-		return
-	}
+	room.SendPatchFile(c, server.db, server.processManager)
+}
 
-	if !server.processManager.Exists(roomUUID) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
-		return
-	}
+func (server *Server) changeRoomName(c *gin.Context) {
+	room.ChangeRoomName(c, server.db, server.processManager)
+}
 
-	fileName := c.Param("filename")
+func (server *Server) getPlayers(c *gin.Context) {
+	multidata.GetPlayers(c, server.db, server.processManager)
+}
 
-	var extractFolderPath string
-	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
-		return
-	}
+func (server *Server) multiworldData(c *gin.Context) {
+	multidata.MultiworldData(c, server.db, server.processManager)
+}
 
-	filePath := filepath.Join(extractFolderPath, fileName)
+func (server *Server) individualPlayerData(c *gin.Context) {
+	multidata.IndividualPlayerData(c, server.db, server.processManager)
+}
 
-	c.FileAttachment(filePath, fileName)
+func (server *Server) SphereData(c *gin.Context) {
+	multidata.SphereData(c, server.db, server.processManager)
 }
 
 func (server *Server) assignToSlot(c *gin.Context) {
-	roomId := c.Param("roomId")
-
-	slot := c.Param("slot")
-	slotint, err := strconv.Atoi(slot)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to convert slot to int: %s", err.Error())})
-		return
-	}
-
-	uuid := "5"
-	switch c.Request.Method {
-	case "PUT":
-		if _, err = server.db.Exec(c.Request.Context(), "UPDATE slots SET player_uuid = $1 WHERE id = $2 AND room_id = $3", uuid, slotint, roomId); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to put assign in database: %s", err.Error())})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{"message": "Successfully assigned"})
-	case "DELETE":
-		if _, err = server.db.Exec(c.Request.Context(), "UPDATE slots SET player_uuid = $1 WHERE id = $2 AND room_id = $3", nil, slotint, roomId); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to put assign in database: %s", err.Error())})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{"message": "Successfully UNassigned"})
-	}
+	multidata.AssignToSlot(c, server.db)
 }
 
 func (server *Server) getStats(c *gin.Context) {
@@ -764,41 +476,6 @@ func (server *Server) getStats(c *gin.Context) {
 	})
 }
 
-func (server *Server) changeRoomName(c *gin.Context) {
-	roomId := c.Param("roomId")
-	roomUUID, err := uuid.Parse(roomId)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
-		return
-	}
-
-	if !server.processManager.Exists(roomUUID) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
-		return
-	}
-
-	var admin string
-	if err = server.db.QueryRow(c.Request.Context(), "SELECT admin FROM rooms WHERE room_id = $1", roomId).Scan(&admin); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
-		return
-	}
-
-	var data map[string]any
-
-	if err = c.ShouldBindJSON(&data); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get room name from JSON: %s", err.Error())})
-		return
-	}
-
-	name := data["name"].(string)
-	if _, err = server.db.Exec(c.Request.Context(), "UPDATE rooms SET name = $1 WHERE room_id = $2", name, roomId); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to update room name: %s", err.Error())})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "success"})
-}
-
 func runMigrations(databaseURL string) error {
 	source, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
@@ -828,7 +505,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	processManager := NewProcessManager()
+	processManager := pm.NewProcessManager()
 
 	server := NewServer(pool, processManager)
 	if err := runMigrations(os.Getenv("DATABASE_URL")); err != nil {
@@ -850,7 +527,7 @@ func main() {
 		ports := rand.Perm(SERVER_PORT + PORT_RANGE - 1 - SERVER_PORT)
 		ports = append([]int{oldport - SERVER_PORT}, ports...)
 		for _, tryport := range ports {
-			if checkPort(tryport) {
+			if helpers.CheckPort(tryport) {
 				port = tryport
 				break
 			}
@@ -873,7 +550,7 @@ func main() {
 			return fmt.Errorf("failed to restart archipelago server: %s", err.Error())
 		}
 
-		decodedArch, err := decompressAP(archFilePath)
+		decodedArch, err := helpers.DecompressAP(archFilePath)
 		if err != nil {
 			return fmt.Errorf("failed to decompress archipelago file")
 		}

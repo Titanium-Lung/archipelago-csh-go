@@ -1,4 +1,4 @@
-package main
+package ProcessManager
 
 import (
 	"bufio"
@@ -12,10 +12,13 @@ import (
 	"syscall"
 	"time"
 	"uuid"
+
+	structs "github.com/Titanium-lung/archipelago-csh-go-backend/Structs"
 )
 
-var ArchipelagoServerPath = "Archipelago-0.6.8/MultiServer.py"
-var ShutdownTime = 7200
+const ArchipelagoServerPath = "Archipelago-0.6.8/MultiServer.py"
+const ShutdownTime = 7200
+const UPLOADS = "./uploads" // change this (?)
 
 type ProcessManager struct {
 	mutex sync.RWMutex
@@ -27,7 +30,7 @@ type ArchipelagoServer struct {
 	stdin      io.WriteCloser
 	logMutex   sync.Mutex
 	restarting bool
-	archFile   *ArchipelagoFile
+	archFile   *structs.ArchipelagoFile
 }
 
 func NewProcessManager() *ProcessManager {
@@ -155,7 +158,7 @@ func (m *ProcessManager) IsRestarting(roomId uuid.UUID) (bool, error) {
 	return server.restarting, nil
 }
 
-func (m *ProcessManager) SetArchipelagoFile(roomId uuid.UUID, file *ArchipelagoFile) error {
+func (m *ProcessManager) SetArchipelagoFile(roomId uuid.UUID, file *structs.ArchipelagoFile) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	server, exists := m.rooms[roomId]
@@ -166,7 +169,7 @@ func (m *ProcessManager) SetArchipelagoFile(roomId uuid.UUID, file *ArchipelagoF
 	return nil
 }
 
-func (m *ProcessManager) GetArchipelagoFile(roomId uuid.UUID) (*ArchipelagoFile, error) {
+func (m *ProcessManager) GetArchipelagoFile(roomId uuid.UUID) (*structs.ArchipelagoFile, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	server, exists := m.rooms[roomId]

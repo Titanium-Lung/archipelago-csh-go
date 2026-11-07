@@ -1,4 +1,4 @@
-package main
+package Helpers
 
 import (
 	"bytes"
@@ -8,7 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	structs "github.com/Titanium-lung/archipelago-csh-go-backend/Structs"
 )
+
+const SCRIPTS = "./pyscripts"
 
 type TimeFormat struct {
 	Data struct {
@@ -16,17 +20,7 @@ type TimeFormat struct {
 	} `json:"data"`
 }
 
-func checkPort(port int) bool {
-	address := fmt.Sprintf(":%d", port)
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		return false
-	}
-	listener.Close()
-	return true
-}
-
-func decompressAP(apPath string) (ArchipelagoFile, error) {
+func DecompressAP(apPath string) (structs.ArchipelagoFile, error) {
 	scriptPath := filepath.Join(SCRIPTS, "decompress_ap.py")
 	cmd := exec.Command("python3", scriptPath, apPath)
 
@@ -34,7 +28,7 @@ func decompressAP(apPath string) (ArchipelagoFile, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	var result ArchipelagoFile
+	var result structs.ArchipelagoFile
 	if err := cmd.Run(); err != nil {
 		return result, fmt.Errorf("python script failed: %w, stderr: %s", err, stderr.String())
 	}
@@ -46,7 +40,7 @@ func decompressAP(apPath string) (ArchipelagoFile, error) {
 	return result, nil
 }
 
-func decompressAPSave(apPath string) (ArchipelagoSaveFile, error) {
+func DecompressAPSave(apPath string) (structs.ArchipelagoSaveFile, error) {
 	scriptPath := filepath.Join(SCRIPTS, "decompress_apsave.py")
 	cmd := exec.Command("python3", scriptPath, apPath)
 
@@ -54,7 +48,7 @@ func decompressAPSave(apPath string) (ArchipelagoSaveFile, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	var result ArchipelagoSaveFile
+	var result structs.ArchipelagoSaveFile
 	if err := cmd.Run(); err != nil {
 		return result, fmt.Errorf("python script failed: %w, stderr: %s", err, stderr.String())
 	}
@@ -66,7 +60,7 @@ func decompressAPSave(apPath string) (ArchipelagoSaveFile, error) {
 	return result, nil
 }
 
-func formatRoomTime(t time.Time, timeZone string) (string, error) {
+func FormatRoomTime(t time.Time, timeZone string) (string, error) {
 	loc, err := time.LoadLocation(timeZone)
 	if err != nil {
 		return "", err
@@ -74,4 +68,14 @@ func formatRoomTime(t time.Time, timeZone string) (string, error) {
 	localTime := t.In(loc)
 
 	return localTime.Format("1/2/06 3:04 pm"), nil
+}
+
+func CheckPort(port int) bool {
+	address := fmt.Sprintf(":%d", port)
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return false
+	}
+	listener.Close()
+	return true
 }

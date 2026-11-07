@@ -1,4 +1,4 @@
-package main
+package Structs
 
 import (
 	"encoding/json"
@@ -51,7 +51,7 @@ func (s *SlotInfo) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func newIdsToNames() *IdsToNames {
+func NewIdsToNames() *IdsToNames {
 	return &IdsToNames{
 		IdToItemName:     make(map[int]string),
 		IdToLocationName: make(map[int]string),

@@ -1,6 +1,7 @@
-package main
+package Multidata
 
 import (
+	"cmp"
 	"database/sql"
 	"fmt"
 	"math"
@@ -14,28 +15,54 @@ import (
 	"unicode"
 	"uuid"
 
+	helpers "github.com/Titanium-lung/archipelago-csh-go-backend/Helpers"
+	pm "github.com/Titanium-lung/archipelago-csh-go-backend/ProcessManager"
+	structs "github.com/Titanium-lung/archipelago-csh-go-backend/Structs"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func GetPlayerInfo(decodedArch *ArchipelagoFile, extractFolderPath string) ([]map[string]any, error) {
-	// decodedArch, err := decompressAP(archFilePath)
-	// if err != nil {
-	// 	return []map[string]any{}, fmt.Errorf("Failed to decompress archipelago file: %w", err)
-	// }
+func GetPlayers(c *gin.Context, db *pgxpool.Pool, processManager *pm.ProcessManager) {
+	roomId := c.Param("roomId")
+	roomUUID, err := uuid.Parse(roomId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
+		return
+	}
+
+	if !processManager.Exists(roomUUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
+		return
+	}
+
+	var extractFolderPath string
+	err = db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
+		return
+	}
+
+	decodedArch, err := processManager.GetArchipelagoFile(roomUUID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get archipelago file: %s", err.Error())})
+		return
+	}
 
 	var players []map[string]any
 	for slotId, slotInfo := range decodedArch.SlotInfo {
 		slot, err := strconv.Atoi(slotId)
 		if err != nil {
-			return []map[string]any{}, fmt.Errorf("Invalid slot integer: %w", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to convert slot id: %s", err.Error())})
+			return
 		}
 		players = append(players, map[string]any{"slot": slot, "name": slotInfo.SlotName, "game": slotInfo.Game})
 	}
 
 	files, err := os.ReadDir(extractFolderPath)
 	if err != nil {
-		return []map[string]any{}, fmt.Errorf("Failed to read extract folder: %w", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to read extract folder path: %s", err.Error())})
+		return
 	}
 
 	for _, file := range files {
@@ -51,7 +78,8 @@ func GetPlayerInfo(decodedArch *ArchipelagoFile, extractFolderPath string) ([]ma
 
 				patchId, err := strconv.Atoi(patchIdStr.String())
 				if err != nil {
-					return []map[string]any{}, fmt.Errorf("Failed to convert patch id to int (even tho it's literally impossible to not): %w", err)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to convert patch id to int (even tho it's literally impossible to not): %s", err.Error())})
+					return
 				}
 				for _, player := range players {
 					if player["slot"].(int) == patchId {
@@ -62,10 +90,16 @@ func GetPlayerInfo(decodedArch *ArchipelagoFile, extractFolderPath string) ([]ma
 		}
 	}
 
-	return players, nil
+	slices.SortFunc(players, func(a, b map[string]any) int {
+		A := a["slot"].(int)
+		B := b["slot"].(int)
+		return cmp.Compare(A, B)
+	})
+
+	c.JSON(http.StatusOK, gin.H{"players": players})
 }
 
-func (server *Server) multiworldData(c *gin.Context) {
+func MultiworldData(c *gin.Context, db *pgxpool.Pool, processManager *pm.ProcessManager) {
 	roomId := c.Param("roomId")
 	roomUUID, err := uuid.Parse(roomId)
 	if err != nil {
@@ -73,26 +107,26 @@ func (server *Server) multiworldData(c *gin.Context) {
 		return
 	}
 
-	if !server.processManager.Exists(roomUUID) {
+	if !processManager.Exists(roomUUID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
 		return
 	}
 
 	var extractFolderPath string
 	var port int
-	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path, port FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath, &port)
+	err = db.QueryRow(c.Request.Context(), "SELECT extract_folder_path, port FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath, &port)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
 		return
 	}
-	rows, _ := server.db.Query(c.Request.Context(), "SELECT name FROM released_games WHERE room_id = $1", roomId)
+	rows, _ := db.Query(c.Request.Context(), "SELECT name FROM released_games WHERE room_id = $1", roomId)
 	releasedGames, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
 		return
 	}
 
-	decodedArch, err := server.processManager.GetArchipelagoFile(roomUUID)
+	decodedArch, err := processManager.GetArchipelagoFile(roomUUID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get archipelago file: %s", err.Error())})
 		return
@@ -127,7 +161,7 @@ func (server *Server) multiworldData(c *gin.Context) {
 		if !file.IsDir() {
 			if strings.HasSuffix(file.Name(), ".apsave") {
 				// decompress apsave
-				decodedApsave, err := decompressAPSave(filepath.Join(extractFolderPath, file.Name()))
+				decodedApsave, err := helpers.DecompressAPSave(filepath.Join(extractFolderPath, file.Name()))
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to decompress apsave file: %s", err.Error())})
 					return
@@ -135,7 +169,7 @@ func (server *Server) multiworldData(c *gin.Context) {
 
 				apsave = true
 
-				playerActivities := make(map[PlayerTuple]float64)
+				playerActivities := make(map[structs.PlayerTuple]float64)
 				for _, clientActivityTimer := range decodedApsave.ClientActivityTimers {
 					playerActivities[clientActivityTimer.PlayerTuple] = clientActivityTimer.Timer
 				}
@@ -146,7 +180,7 @@ func (server *Server) multiworldData(c *gin.Context) {
 					totalChecks += checks
 
 					playerTupleList := decodedArch.ConnectNames[player["name"].(string)] // format: [team#, slot#]
-					playerTuple := PlayerTuple{Team: playerTupleList[0], Slot: playerTupleList[1]}
+					playerTuple := structs.PlayerTuple{Team: playerTupleList[0], Slot: playerTupleList[1]}
 
 					var checked int
 					locationChecks, exists := decodedApsave.LocationChecks[playerTuple]
@@ -230,7 +264,7 @@ func (server *Server) multiworldData(c *gin.Context) {
 					}
 				}
 
-				batchResult := server.db.SendBatch(c.Request.Context(), &hintQueries)
+				batchResult := db.SendBatch(c.Request.Context(), &hintQueries)
 				if err = batchResult.Close(); err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to scan hint data from database row: %s", err.Error())})
 					return
@@ -269,7 +303,7 @@ func (server *Server) multiworldData(c *gin.Context) {
 	})
 }
 
-func (server *Server) individualPlayerData(c *gin.Context) {
+func IndividualPlayerData(c *gin.Context, db *pgxpool.Pool, processManager *pm.ProcessManager) {
 	roomId := c.Param("roomId")
 	roomUUID, err := uuid.Parse(roomId)
 	if err != nil {
@@ -277,7 +311,7 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 		return
 	}
 
-	if !server.processManager.Exists(roomUUID) {
+	if !processManager.Exists(roomUUID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
 		return
 	}
@@ -290,13 +324,13 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 	}
 
 	var extractFolderPath string
-	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
+	err = db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
 		return
 	}
 
-	decodedArch, err := server.processManager.GetArchipelagoFile(roomUUID)
+	decodedArch, err := processManager.GetArchipelagoFile(roomUUID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get archipelago file: %s", err.Error())})
 		return
@@ -309,7 +343,7 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 	var playerUuid sql.NullString
 
 	var locationName, locationId string
-	locationRows, err := server.db.Query(c.Request.Context(), "SELECT location_name, location_id FROM locations WHERE room_id = $1 AND slot = $2", roomId, slot)
+	locationRows, err := db.Query(c.Request.Context(), "SELECT location_name, location_id FROM locations WHERE room_id = $1 AND slot = $2", roomId, slot)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
 		return
@@ -330,7 +364,7 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 	itemInfos := make(map[string]map[string]string)
 	var itemid, itemname string
 	var locationsChecked int
-	itemRows, _ := server.db.Query(c.Request.Context(), "SELECT i.id, i.name, s.name, s.player_uuid, s.checks FROM items as i, slots as s WHERE i.room_id = $1 AND s.room_id = i.room_id AND s.id = $2 AND i.game = s.game", roomId, slot)
+	itemRows, _ := db.Query(c.Request.Context(), "SELECT i.id, i.name, s.name, s.player_uuid, s.checks FROM items as i, slots as s WHERE i.room_id = $1 AND s.room_id = i.room_id AND s.id = $2 AND i.game = s.game", roomId, slot)
 	_, err = pgx.ForEachRow(itemRows, []any{&itemid, &itemname, &name, &playerUuid, &locationsChecked}, func() error {
 		itemInfos[itemid] = make(map[string]string)
 		itemInfos[itemid]["name"] = itemname
@@ -364,14 +398,14 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 		if !file.IsDir() {
 			if strings.HasSuffix(file.Name(), ".apsave") {
 				// decompress apsave
-				decodedApsave, err := decompressAPSave(filepath.Join(extractFolderPath, file.Name()))
+				decodedApsave, err := helpers.DecompressAPSave(filepath.Join(extractFolderPath, file.Name()))
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to decompress apsave file: %s", err.Error())})
 					return
 				}
 
-				expandedPlayerTuple := *NewExpandedPlayerTuple(0, slotint, true)
-				playerTuple := *NewPlayerTuple(0, slotint)
+				expandedPlayerTuple := *structs.NewExpandedPlayerTuple(0, slotint, true)
+				playerTuple := *structs.NewPlayerTuple(0, slotint)
 
 				if receivedItems, exists := decodedApsave.ReceivedItems[expandedPlayerTuple]; exists {
 					for _, item := range receivedItems {
@@ -402,7 +436,7 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 
 				if gameState, exists := decodedApsave.ClientGameState[playerTuple]; exists {
 					if updatedLocationsChecked != locationsChecked && gameState != 30 {
-						_, err := server.db.Exec(c.Request.Context(), "UPDATE slots SET checks = $1 WHERE id = $2 AND room_id = $3 AND LOWER(name) NOT IN (SELECT name FROM released_games WHERE room_id = $3)", updatedLocationsChecked, slot, roomId)
+						_, err := db.Exec(c.Request.Context(), "UPDATE slots SET checks = $1 WHERE id = $2 AND room_id = $3 AND LOWER(name) NOT IN (SELECT name FROM released_games WHERE room_id = $3)", updatedLocationsChecked, slot, roomId)
 						if err != nil {
 							c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to update locations checked: %s", err.Error())})
 							return
@@ -441,7 +475,7 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 							return nil
 						})
 					}
-					batchResult := server.db.SendBatch(c.Request.Context(), &hintQueries)
+					batchResult := db.SendBatch(c.Request.Context(), &hintQueries)
 					if err = batchResult.Close(); err != nil {
 						c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to scan hint data from database: %s", err.Error())})
 						return
@@ -470,7 +504,7 @@ func (server *Server) individualPlayerData(c *gin.Context) {
 	}
 }
 
-func (server *Server) SphereData(c *gin.Context) {
+func SphereData(c *gin.Context, db *pgxpool.Pool, processManager *pm.ProcessManager) {
 	roomId := c.Param("roomId")
 	roomUUID, err := uuid.Parse(roomId)
 	if err != nil {
@@ -478,13 +512,13 @@ func (server *Server) SphereData(c *gin.Context) {
 		return
 	}
 
-	if !server.processManager.Exists(roomUUID) {
+	if !processManager.Exists(roomUUID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
 		return
 	}
 
 	var extractFolderPath string
-	err = server.db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
+	err = db.QueryRow(c.Request.Context(), "SELECT extract_folder_path FROM rooms WHERE room_id = $1", roomId).Scan(&extractFolderPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
 		return
@@ -501,7 +535,7 @@ func (server *Server) SphereData(c *gin.Context) {
 		if !file.IsDir() {
 			if strings.HasSuffix(file.Name(), ".apsave") {
 				// decompress apsave
-				decodedApsave, err := decompressAPSave(filepath.Join(extractFolderPath, file.Name()))
+				decodedApsave, err := helpers.DecompressAPSave(filepath.Join(extractFolderPath, file.Name()))
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to decompress apsave file: %s", err.Error())})
 					return
@@ -532,7 +566,7 @@ func (server *Server) SphereData(c *gin.Context) {
 						})
 					}
 				}
-				batchResult := server.db.SendBatch(c.Request.Context(), &locationBatch)
+				batchResult := db.SendBatch(c.Request.Context(), &locationBatch)
 				if err = batchResult.Close(); err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to send batch of requests to database: %s", err.Error())})
 					return
@@ -544,4 +578,33 @@ func (server *Server) SphereData(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"items": items,
 	})
+}
+
+func AssignToSlot(c *gin.Context, db *pgxpool.Pool) {
+	roomId := c.Param("roomId")
+
+	slot := c.Param("slot")
+	slotint, err := strconv.Atoi(slot)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to convert slot to int: %s", err.Error())})
+		return
+	}
+
+	uuid := "5"
+	switch c.Request.Method {
+	case "PUT":
+		if _, err = db.Exec(c.Request.Context(), "UPDATE slots SET player_uuid = $1 WHERE id = $2 AND room_id = $3", uuid, slotint, roomId); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to put assign in database: %s", err.Error())})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Successfully assigned"})
+	case "DELETE":
+		if _, err = db.Exec(c.Request.Context(), "UPDATE slots SET player_uuid = $1 WHERE id = $2 AND room_id = $3", nil, slotint, roomId); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to put assign in database: %s", err.Error())})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Successfully UNassigned"})
+	}
 }
