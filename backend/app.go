@@ -665,16 +665,6 @@ func (server *Server) sendPatchFile(c *gin.Context) {
 
 func (server *Server) assignToSlot(c *gin.Context) {
 	roomId := c.Param("roomId")
-	roomUUID, err := uuid.Parse(roomId)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
-		return
-	}
-
-	if !server.processManager.Exists(roomUUID) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
-		return
-	}
 
 	slot := c.Param("slot")
 	slotint, err := strconv.Atoi(slot)
