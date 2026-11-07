@@ -764,6 +764,41 @@ func (server *Server) getStats(c *gin.Context) {
 	})
 }
 
+func (server *Server) changeRoomName(c *gin.Context) {
+	roomId := c.Param("roomId")
+	roomUUID, err := uuid.Parse(roomId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse room id to uuid: %s", err.Error())})
+		return
+	}
+
+	if !server.processManager.Exists(roomUUID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No archipelago game with this id"})
+		return
+	}
+
+	var admin string
+	if err = server.db.QueryRow(c.Request.Context(), "SELECT admin FROM rooms WHERE room_id = $1", roomId).Scan(&admin); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
+		return
+	}
+
+	var data map[string]any
+
+	if err = c.ShouldBindJSON(&data); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get room name from JSON: %s", err.Error())})
+		return
+	}
+
+	name := data["name"].(string)
+	if _, err = server.db.Exec(c.Request.Context(), "UPDATE rooms SET name = $1 WHERE room_id = $2", name, roomId); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to update room name: %s", err.Error())})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "success"})
+}
+
 func runMigrations(databaseURL string) error {
 	source, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
@@ -885,6 +920,7 @@ func main() {
 	router.PUT("/api/assign/:roomId/:slot", server.assignToSlot)
 	router.DELETE("/api/assign/:roomId/:slot", server.assignToSlot)
 	router.GET("/api/stats", server.getStats)
+	router.PUT("/api/room/change/:roomId", server.changeRoomName)
 
 	router.Run(":5001")
 }
