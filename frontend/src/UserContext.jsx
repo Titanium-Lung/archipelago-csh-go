@@ -14,7 +14,8 @@ export function UserProvider({ children }) {
                 const data = await response.json()
                 setUser(data)
             } else if (window.location.pathname !== '/login') {
-                window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`
+                const next = window.location.pathname + window.location.search
+                window.location.href = `/login?next=${encodeURIComponent(next)}`
             }
         }
         fetchUser()

@@ -22,6 +22,7 @@ import (
 	pm "github.com/Titanium-lung/archipelago-csh-go-backend/ProcessManager"
 	room "github.com/Titanium-lung/archipelago-csh-go-backend/Room"
 	structs "github.com/Titanium-lung/archipelago-csh-go-backend/Structs"
+	cshAuth "github.com/computersciencehouse/csh-auth/v2"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-migrate/migrate/v4"
@@ -31,19 +32,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type User struct {
-	UUID     string `json:"uuid"`
-	Username string `json:"username"`
-	Picture  string `json:"picture_url"`
-	CSH      bool   `json:"csh"`
-}
-
 type Server struct {
 	db             *pgxpool.Pool
 	processManager *pm.ProcessManager
 }
-
-var user User
 
 const UPLOADS = "./uploads"
 const SCRIPTS = "./pyscripts"
@@ -54,11 +46,48 @@ const PORT_RANGE = 20
 var migrationsFS embed.FS
 
 func NewServer(db *pgxpool.Pool, mngr *pm.ProcessManager) *Server {
-	return &Server{db: db, processManager: mngr}
+	return &Server{
+		db:             db,
+		processManager: mngr,
+	}
 }
 
 func getUser(c *gin.Context) {
-	c.JSON(http.StatusOK, user)
+	userValue, exists := c.Get("cshauth")
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	user, ok := userValue.(*cshAuth.Claims)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"username":    user.Username,
+		"uuid":        user.Uuid,
+		"picture_url": fmt.Sprintf("https://profiles.csh.rit.edu/image/%s", user.Username),
+		"csh":         true,
+	})
+}
+
+// apiAuth validates the Auth cookie like auth.CookieMiddleware(), but answers
+// with a status code instead of redirecting, which is what fetch() from the SPA needs.
+func apiAuth(auth *cshAuth.Auth) gin.HandlerFunc {
+	validate := auth.HeaderMiddleware()
+	return func(c *gin.Context) {
+		token, err := c.Cookie(cshAuth.AuthCookieName)
+		if err != nil || token == "" {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		// HeaderMiddleware verifies a Bearer token and stores the claims in the
+		// context, so hand it the cookie's token in that form
+		c.Request.Header.Set("Authorization", "Bearer "+token)
+		validate(c)
+	}
 }
 
 func (server *Server) uploadFile(c *gin.Context) {
@@ -493,11 +522,6 @@ func runMigrations(databaseURL string) error {
 }
 
 func main() {
-	user.UUID = "5"
-	user.Username = "lung"
-	user.Picture = "https://profiles.csh.rit.edu/image/lung"
-	user.CSH = true
-
 	pool, err := pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
@@ -509,6 +533,20 @@ func main() {
 
 	server := NewServer(pool, processManager)
 	if err := runMigrations(os.Getenv("DATABASE_URL")); err != nil {
+		log.Fatal(err)
+	}
+
+	serverURL := "http://localhost:5001/api"
+
+	auth, err := cshAuth.Init(
+		os.Getenv("OIDC_CLIENT_ID"),
+		os.Getenv("OIDC_CLIENT_SECRET"),
+		serverURL,
+		serverURL+"/login",
+		serverURL+"/callback",
+		[]string{"profile"},
+	)
+	if err != nil {
 		log.Fatal(err)
 	}
 
@@ -568,11 +606,13 @@ func main() {
 
 	os.Mkdir(filepath.Join(".", "uploads"), os.ModePerm)
 
+	frontendURL := os.Getenv("FRONTEND_URL")
+
 	router := gin.Default()
 	router.SetTrustedProxies(nil)
 
 	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173"},
+		AllowOrigins:     []string{frontendURL},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -580,10 +620,15 @@ func main() {
 		MaxAge:           12 * time.Hour,
 	}))
 
-	router.GET("/api/user", getUser)
+	router.GET("/api", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, frontendURL+"/login")
+	})
+
+	router.GET("/api/user", apiAuth(&auth), getUser)
 	router.POST("/api/upload", server.uploadFile)
 	router.PUT("/api/rooms", server.getAllRooms)
 	router.DELETE("/api/delete/:roomId", server.deleteRoom)
+
 	router.GET("/api/room/:roomId", server.roomInfo)
 	router.GET("/api/players/:roomId", server.getPlayers)
 	router.GET("/api/players/:roomId/:filename", server.sendPatchFile)
@@ -591,13 +636,19 @@ func main() {
 	router.GET("/api/log/:roomId", server.getLog)
 	router.GET("/api/log/stream/:roomId", server.streamLog)
 	router.POST("/api/command/:roomId", server.serverCommand)
+	router.PUT("/api/room/change/:roomId", server.changeRoomName)
+
 	router.GET("/api/tracker/:roomId", server.multiworldData)
 	router.GET("/api/tracker/:roomId/:slot", server.individualPlayerData)
 	router.GET("/api/spheres/:roomId", server.SphereData)
 	router.PUT("/api/assign/:roomId/:slot", server.assignToSlot)
 	router.DELETE("/api/assign/:roomId/:slot", server.assignToSlot)
+
 	router.GET("/api/stats", server.getStats)
-	router.PUT("/api/room/change/:roomId", server.changeRoomName)
+
+	router.GET("/api/login", auth.HandleLogin)
+	router.GET("/api/callback", auth.HandleCallback)
+	router.GET("/api/logout", auth.HandleLogout)
 
 	router.Run(":5001")
 }

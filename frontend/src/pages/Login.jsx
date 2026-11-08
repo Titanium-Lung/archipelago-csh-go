@@ -1,10 +1,18 @@
 import google_logo from "../assets/Google_logo.svg"
 import csh_logo from "../assets/CSH_logo.png"
 import { Navbar } from "../Navbar"
+import { useUser } from "../UserContext"
+import { useEffect } from "react"
 
 function Login() {
     const params = new URLSearchParams(window.location.search)
-    const next = params.get('next') || '/'
+    const rawNext = params.get('next') || '/'
+    const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/'
+    const returnTo = `${window.location.origin}${next}`
+    const user = useUser()
+    
+    // Put the user back if they visit this page while logged in
+    useEffect(() => { if (user) window.location.replace(next) }, [user])
 
     return (
         <div>
@@ -13,7 +21,7 @@ function Login() {
             <div className="row justify-content-center mt-5">
                 <div className="col-auto text-center">
                     <h2>Login with CSH</h2>
-                    <a href={`${import.meta.env.VITE_BACKEND_URL}/login?next=${encodeURIComponent(next)}`}>
+                    <a href={`${import.meta.env.VITE_BACKEND_URL}/login?referer=${encodeURIComponent(returnTo)}`}>
                         <img src={csh_logo} style={{ width: "400px" }} className="rounded" alt="CSH logo" />
                     </a>
                 </div>
