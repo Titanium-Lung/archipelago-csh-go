@@ -18,6 +18,7 @@ import (
 	helpers "github.com/Titanium-lung/archipelago-csh-go-backend/Helpers"
 	pm "github.com/Titanium-lung/archipelago-csh-go-backend/ProcessManager"
 	structs "github.com/Titanium-lung/archipelago-csh-go-backend/Structs"
+	cshAuth "github.com/computersciencehouse/csh-auth/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -590,7 +591,20 @@ func AssignToSlot(c *gin.Context, db *pgxpool.Pool) {
 		return
 	}
 
-	uuid := "5"
+	userValue, exists := c.Get("cshauth")
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	user, ok := userValue.(*cshAuth.Claims)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	uuid := user.Uuid
+
 	switch c.Request.Method {
 	case "PUT":
 		if _, err = db.Exec(c.Request.Context(), "UPDATE slots SET player_uuid = $1 WHERE id = $2 AND room_id = $3", uuid, slotint, roomId); err != nil {

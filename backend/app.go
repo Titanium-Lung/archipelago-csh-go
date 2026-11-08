@@ -136,8 +136,21 @@ func (server *Server) uploadFile(c *gin.Context) {
 	c.SaveUploadedFile(file, zipFolderPath)
 
 	roomId := uuid.New()
-	admin := "5"
 	start := time.Now()
+
+	userValue, exists := c.Get("cshauth")
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	user, ok := userValue.(*cshAuth.Claims)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	admin := user.Uuid
 
 	archFilePath := ""
 
@@ -361,7 +374,22 @@ func (server *Server) deleteRoom(c *gin.Context) {
 		return
 	}
 
-	// TODO: check if current user is admin
+	userValue, exists := c.Get("cshauth")
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	user, ok := userValue.(*cshAuth.Claims)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	if admin != user.Uuid {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You are not the admin of this room"})
+		return
+	}
 
 	roomUUID, err := uuid.Parse(roomId)
 	if err != nil {
@@ -434,7 +462,19 @@ func (server *Server) assignToSlot(c *gin.Context) {
 }
 
 func (server *Server) getStats(c *gin.Context) {
-	uuid := "5"
+	userValue, exists := c.Get("cshauth")
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	user, ok := userValue.(*cshAuth.Claims)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	uuid := user.Uuid
 
 	var name, game, roomId, roomName string
 	var checks, slotId int
@@ -625,9 +665,9 @@ func main() {
 	})
 
 	router.GET("/api/user", apiAuth(&auth), getUser)
-	router.POST("/api/upload", server.uploadFile)
+	router.POST("/api/upload", apiAuth(&auth), server.uploadFile)
 	router.PUT("/api/rooms", server.getAllRooms)
-	router.DELETE("/api/delete/:roomId", server.deleteRoom)
+	router.DELETE("/api/delete/:roomId", apiAuth(&auth), server.deleteRoom)
 
 	router.GET("/api/room/:roomId", server.roomInfo)
 	router.GET("/api/players/:roomId", server.getPlayers)
@@ -635,16 +675,16 @@ func main() {
 	router.PUT("/api/restart/:roomId", server.restartRoom)
 	router.GET("/api/log/:roomId", server.getLog)
 	router.GET("/api/log/stream/:roomId", server.streamLog)
-	router.POST("/api/command/:roomId", server.serverCommand)
-	router.PUT("/api/room/change/:roomId", server.changeRoomName)
+	router.POST("/api/command/:roomId", apiAuth(&auth), server.serverCommand)
+	router.PUT("/api/room/change/:roomId", apiAuth(&auth), server.changeRoomName)
 
 	router.GET("/api/tracker/:roomId", server.multiworldData)
 	router.GET("/api/tracker/:roomId/:slot", server.individualPlayerData)
 	router.GET("/api/spheres/:roomId", server.SphereData)
-	router.PUT("/api/assign/:roomId/:slot", server.assignToSlot)
-	router.DELETE("/api/assign/:roomId/:slot", server.assignToSlot)
+	router.PUT("/api/assign/:roomId/:slot", apiAuth(&auth), server.assignToSlot)
+	router.DELETE("/api/assign/:roomId/:slot", apiAuth(&auth), server.assignToSlot)
 
-	router.GET("/api/stats", server.getStats)
+	router.GET("/api/stats", apiAuth(&auth), server.getStats)
 
 	router.GET("/api/login", auth.HandleLogin)
 	router.GET("/api/callback", auth.HandleCallback)

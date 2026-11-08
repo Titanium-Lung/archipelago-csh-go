@@ -15,6 +15,7 @@ import (
 
 	helpers "github.com/Titanium-lung/archipelago-csh-go-backend/Helpers"
 	pm "github.com/Titanium-lung/archipelago-csh-go-backend/ProcessManager"
+	cshAuth "github.com/computersciencehouse/csh-auth/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -156,7 +157,22 @@ func ServerCommand(c *gin.Context, db *pgxpool.Pool, processManager *pm.ProcessM
 		return
 	}
 
-	// TODO: check if the user is the admin
+	userValue, exists := c.Get("cshauth")
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	user, ok := userValue.(*cshAuth.Claims)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	if admin != user.Uuid {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You are not the admin of this room"})
+		return
+	}
 
 	var data map[string]any
 
@@ -303,6 +319,23 @@ func ChangeRoomName(c *gin.Context, db *pgxpool.Pool, processManager *pm.Process
 	var admin string
 	if err = db.QueryRow(c.Request.Context(), "SELECT admin FROM rooms WHERE room_id = $1", roomId).Scan(&admin); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get information from database: %s", err.Error())})
+		return
+	}
+
+	userValue, exists := c.Get("cshauth")
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	user, ok := userValue.(*cshAuth.Claims)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Couldn't get logged in user"})
+		return
+	}
+
+	if admin != user.Uuid {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You are not the admin of this room"})
 		return
 	}
 

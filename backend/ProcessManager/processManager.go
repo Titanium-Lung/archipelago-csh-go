@@ -81,8 +81,6 @@ func (m *ProcessManager) StartServer(roomId uuid.UUID, archFilePath string, extr
 
 	m.rooms[roomId] = server
 
-	fmt.Printf("Starting server on port %d\n", port)
-
 	return nil
 }
 
