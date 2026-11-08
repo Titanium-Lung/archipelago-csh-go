@@ -649,6 +649,7 @@ func main() {
 	router.GET("/api/login", auth.HandleLogin)
 	router.GET("/api/callback", auth.HandleCallback)
 	router.GET("/api/logout", auth.HandleLogout)
+	router.POST("/api/refresh", auth.HandleRefresh)
 
 	router.Run(":5001")
 }

@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect } from "react"
+import { apiFetch } from "./refresh"
 
 const UserContext = createContext(null)
 
@@ -7,9 +8,7 @@ export function UserProvider({ children }) {
 
     useEffect(() => {
         async function fetchUser() {
-            const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/user`, {
-                credentials: "include"
-            })
+            const response = await apiFetch("/user")
             if (response.ok) {
                 const data = await response.json()
                 setUser(data)
